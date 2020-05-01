@@ -15,11 +15,11 @@ int main(int argc, char *argv[]) {
 
 	struct randInts {
 		randInts() = default;
-		randInts(ssize_t n): n_{n} {}
-		bool operator ==(randInts const &rhs) { return rhs.n_ == n_; }
-		bool operator !=(randInts const &rhs) { return !(*this == rhs); }
+		explicit randInts(ssize_t n): n_{n} {}
+		bool operator ==(randInts const &rhs) const { return rhs.n_ == n_; }
+		bool operator !=(randInts const &rhs) const { return !(*this == rhs); }
 		randInts &operator++() { --n_; return *this; }
-		int operator*() { return std::rand(); }
+		int operator*() const { return std::rand(); }
 		private: ssize_t n_{};
 	};
 

@@ -119,7 +119,7 @@ private:
 //extern Logger logger;
 
 using namespace std::string_literals;
-constexpr inline const char *_basename(const char *path) {
+inline const char *_basename(const char *path) {
     const char *p = path + strlen(path);
     while (p > path && *p != '/')
         --p;
