@@ -1,28 +1,61 @@
 cmake_minimum_required(VERSION 3.15)
-project(LOGGER LANGUAGES CXX)
-set(CMAKE_CXX_STANDARD 17)
+project(LOGGER LANGUAGES CXX VERSION 1.0)
 
-include(FindThreads)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+set(CMAKE_INCLUDE_CURRENT_DIR_IN_INTERFACE ON)
+
+include(ExternalProject)
 include(FetchContent)
 
-FetchContent_Declare(chalk GIT_REPOSITORY https://github.com/ebenali/chalk)
-FetchContent_MakeAvailable(chalk)
-
-FetchContent_Declare(hhdate GIT_REPOSITORY https://github.com/HowardHinnant/date)
-FetchContent_MakeAvailable(hhdate)	
-
-FetchContent_Declare(fmt GIT_REPOSITORY https://github.com/fmtlib/fmt)
-FetchContent_MakeAvailable(fmt)
-
-include(FindThreads)
 add_library(liblogger INTERFACE)
+
+find_package(chalk QUIET)
+if (NOT TARGET chalk::chalk)
+  FetchContent_Declare(chalk GIT_REPOSITORY https://github.com/ebenali/chalk)
+  FetchContent_GetProperties(chalk)
+  if (NOT chalk_POPULATED)
+    FetchContent_Populate(chalk)
+    add_subdirectory(${chalk_SOURCE_DIR} ${chalk_BINARY_DIR} EXCLUDE_FROM_ALL)
+  endif()
+endif()
+
+find_package(date QUIET)
+if (NOT TARGET date::date)
+  FetchContent_Declare(hhdate GIT_REPOSITORY https://github.com/HowardHinnant/date)
+  FetchContent_MakeAvailable(hhdate)	
+  endif()
+
+if (NOT TARGET fmt::fmt)
+  FetchContent_Declare(fmt GIT_REPOSITORY https://github.com/fmtlib/fmt)
+  FetchContent_GetProperties(fmt)
+  if (NOT fmt_POPULATED)
+    FetchContent_Populate(fmt)
+    list(APPEND CMAKE_MODULE_PATH "${fmt_BINARY_DIR}")
+    find_package(fmt REQUIRED)
+  endif()
+endif()
+
+if (NOT TARGET Threads::Threads)
+  include(FindThreads)
+endif()
+
 target_link_libraries(liblogger INTERFACE chalk::chalk date::date Threads::Threads fmt::fmt)
-target_include_directories(liblogger INTERFACE "${CMAKE_CURRENT_LIST_DIR}")
+target_include_directories(liblogger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}> $<INSTALL_INTERFACE:include/liblogger>)
 target_compile_options(liblogger INTERFACE -Wno-deprecated-declarations)
-target_sources(liblogger INTERFACE logutil.h)
+target_sources(liblogger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/logutil.h> $<INSTALL_INTERFACE:>)
+set_target_properties(liblogger PROPERTIES PUBLIC_HEADER logutil.h)
+
 
 set(LIBLOGGER_COMPILE_EXAMPLE CACHE BOOL ON)
 if(LIBLOGGER_COMPILE_EXAMPLE)
-	add_executable(example example.cc)
-	target_link_libraries(example PRIVATE liblogger)
+  add_executable(example example.cc)
+  target_link_libraries(example PRIVATE liblogger)
+endif()
+
+set(LIBLOGGER_INSTALL CACHE BOOL ON)
+if(LIBLOGGER_INSTALL)
+  include(GNUInstallDirs)
+  install(TARGETS liblogger EXPORT liblogger PUBLIC_HEADER DESTINATION include/liblogger)
+  install(EXPORT liblogger NAMESPACE liblogger:: DESTINATION lib/cmake/liblogger)
 endif()
