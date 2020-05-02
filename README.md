@@ -7,6 +7,8 @@ arbitrary `std::ostream` object(s) (files, sockets, etc...).
 
 Output lines are prefixed with ISO timestamps and suffixed `+<duration>`,[debug](https://www.npmjs.com/package/debug)-style.
 
+![Sample Session](sample-session.svg)
+
 ## API
 * `Logger(std::ostream &outStream, std::ostream &errStream)`: constructor outStream and errStream defaults to `stdin` and `stderr`
 * `Logger::Info`, `Logger::Warn`, `Logger:Error`, `Logger:Debug`, `Logger:Trace`: different output levels with indicative formatting
