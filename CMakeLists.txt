@@ -59,3 +59,5 @@ if(LIBLOGGER_INSTALL)
   install(TARGETS liblogger EXPORT liblogger PUBLIC_HEADER DESTINATION include/liblogger)
   install(EXPORT liblogger NAMESPACE liblogger:: DESTINATION lib/cmake/liblogger)
 endif()
+
+export(EXPORT liblogger NAMESPACE liblogger:: FILE libloggerConfig.cmake)
