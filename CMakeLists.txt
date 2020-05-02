@@ -8,6 +8,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR_IN_INTERFACE ON)
 include(FetchContent)
 
 add_library(liblogger INTERFACE)
+add_library(liblogger::liblogger ALIAS liblogger)
 
 find_package(chalk QUIET)
 if (NOT TARGET chalk::chalk)
