@@ -1,5 +1,5 @@
 # liblogger
-C++17 logging facility.
+C++17 logging facility and slack messenger;
 Header-only library for logging.
 
 User can either retrieve a singleton instance which logs to `stdout`/`stderr`, or construct a new instance of logger backed by

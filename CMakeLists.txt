@@ -52,9 +52,9 @@ set_target_properties(liblogger PROPERTIES PUBLIC_HEADER logutil.h)
 
 option(LIBLOGGER_COMPILE_EXAMPLE "Compile sample script" ON)
 if(LIBLOGGER_COMPILE_EXAMPLE)
-	add_executable(liblogger-example example.cc)
+	add_executable(liblogger-example logutil_example.cc)
 	target_link_libraries(liblogger-example PRIVATE liblogger)
-	set_target_properties(liblogger-example PROPERTIES OUTPUT_NAME example)
+	set_target_properties(liblogger-example PROPERTIES OUTPUT_NAME logutil_example)
 endif()
 
 option(LIBLOGGER_INSTALL "Install liblogger" ON)
