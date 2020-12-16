@@ -44,7 +44,7 @@ if (NOT TARGET Threads::Threads)
 	include(FindThreads)
 endif()
 
-target_link_libraries(liblogger INTERFACE chalk::chalk date::date Threads::Threads fmt::fmt)
+target_link_libraries(liblogger INTERFACE chalk::chalk date::date Threads::Threads fmt::fmt-header-only)
 target_include_directories(liblogger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}> $<INSTALL_INTERFACE:include/liblogger>)
 target_compile_options(liblogger INTERFACE -Wno-deprecated-declarations)
 target_sources(liblogger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/logutil.h> $<INSTALL_INTERFACE:>)
