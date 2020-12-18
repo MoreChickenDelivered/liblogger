@@ -28,10 +28,10 @@ int main(int argc, char *argv[]) {
 
 	using Severity = Slack::Severity;
 
-	slack->send("Testing INFO", "Pertinent Information....");
+	slack->send("Testing INFO", "Pertinent Information....", Severity::INFO, true);
 	std::this_thread::sleep_for(std::chrono::seconds(2));
 
-	slack->send("Testing ERROR", "Pertinent Information....", Severity::ERROR);
+	slack->send("Testing ERROR", "Pertinent Information....", Severity::ERROR, true);
 
 	std::this_thread::sleep_for(std::chrono::seconds(2));
 	slack->send("Testing WARN", "Pertinent Information....", Severity::WARN);

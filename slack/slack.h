@@ -62,7 +62,9 @@ namespace Slack {
 		 *  async operation by default
 		 *  'text' is markdown formatted
 		 */
-		void send(std::string title, std::string body, Severity level = Severity::INFO, bool sync=false) {
+		void send(std::string const &title, std::string const &body, Severity level = Severity::INFO, bool sync=false) {
+			while (!thread_initialized_)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			std::unique_lock<std::mutex> lk;
 			if (sync)
 				lk = std::unique_lock<std::mutex>{slack_queue_mtx_};
@@ -114,6 +116,8 @@ namespace Slack {
 					//LOG(INFO) << "Slack message dispatch initialized";
 					for (;;) {
 						std::unique_lock lk{slack_queue_mtx_};
+
+						thread_initialized_ = true;
 
 						slack_queue_cnd_.wait(lk, [&] {return thread_bail_out_ || !slack_queue_.empty();});
 						if (thread_bail_out_)
@@ -180,7 +184,8 @@ namespace Slack {
 		std::vector<nlohmann::json> slack_queue_;
 		std::condition_variable slack_queue_cnd_;
 		std::condition_variable slack_empty_cnd_;
-		std::atomic<bool> thread_bail_out_;
+		std::atomic<bool> thread_bail_out_ = false;
+		std::atomic<bool> thread_initialized_ = false;
 		std::mutex slack_queue_mtx_;
 		std::string slack_webhook_;
 		std::string slack_botname_;
