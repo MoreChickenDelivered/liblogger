@@ -84,7 +84,11 @@ namespace Slack {
 				},
 			}, sync);
 			if (sync) {
-				slack_empty_cnd_.wait(lk, [&]{ return slack_queue_.empty(); });
+				lk.unlock();
+				slack_queue_cnd_.notify_one();
+				lk.lock();
+				if (!slack_queue.empty())
+					slack_empty_cnd_.wait(lk, [&]{ return slack_queue_.empty(); });
 			}
 		}
 
@@ -148,9 +152,10 @@ namespace Slack {
 			if (!locked)
 				lk = std::unique_lock<std::mutex>{slack_queue_mtx_};
 			slack_queue_.emplace_back(std::move(msg));
-			if (!locked)
+			if (!locked) {
 				lk.unlock();
-			slack_queue_cnd_.notify_one();
+				slack_queue_cnd_.notify_one();
+			}
 		}
 
 		void send_slack(nlohmann::json msg) {
