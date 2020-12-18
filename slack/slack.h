@@ -87,7 +87,7 @@ namespace Slack {
 				lk.unlock();
 				slack_queue_cnd_.notify_one();
 				lk.lock();
-				if (!slack_queue.empty())
+				if (!slack_queue_.empty())
 					slack_empty_cnd_.wait(lk, [&]{ return slack_queue_.empty(); });
 			}
 		}
