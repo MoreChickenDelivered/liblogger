@@ -96,7 +96,9 @@ namespace Slack {
 		 *  @config has to be only passed first time around
 		 */
 		static std::shared_ptr<SlackMessenger> get(nlohmann::json const *config) {
-			static std::shared_ptr<SlackMessenger> singleton = std::make_shared<SlackMessenger>(*config);
+			static std::shared_ptr<SlackMessenger> singleton = nullptr;
+			if (!singleton && config)
+			    singleton = std::make_shared<SlackMessenger>(*config);
 			return singleton;
 		}
 
