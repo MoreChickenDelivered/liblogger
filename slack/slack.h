@@ -83,8 +83,9 @@ namespace Slack {
 					}
 				},
 			}, sync);
-			if (sync)
+			if (sync) {
 				slack_empty_cnd_.wait(lk, [&]{ return slack_queue_.empty(); });
+			}
 		}
 
 		void set_footer_callback(std::function<std::string(void)> callback) {
@@ -123,6 +124,7 @@ namespace Slack {
 							//	break;
 						}
 
+						lk.unlock();
 						slack_empty_cnd_.notify_all();
 					}
 				}
