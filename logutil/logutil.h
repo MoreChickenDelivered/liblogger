@@ -102,13 +102,13 @@ private:
     static constexpr auto warnChalk = chalk::fg::Yellow;
     static constexpr auto debugChalk = chalk::fg::Magenta;
     static constexpr auto traceChalk = chalk::compose(chalk::fmt::Italic, chalk::fg::Blue);
+    inline static std::unique_ptr<Logger> singleton = std::make_unique<Logger>();
 
     public:
         /**
          * singleton style
          */
          static Logger &get() {
-             static std::unique_ptr<Logger> singleton = std::make_unique<Logger>();
              return *singleton;
          }
 };
