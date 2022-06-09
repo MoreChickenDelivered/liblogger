@@ -10,7 +10,6 @@
 #include <iostream>
 #include <sstream>
 #include <chrono>
-#include <mutex>
 #include <string>
 
 #include <fmt/format.h>
@@ -75,10 +74,9 @@ struct Logger {
 protected:
     template<typename Clock, typename _fmtType, typename ..._Args>
     std::ostream &output(std::chrono::time_point<Clock> &&tm, std::ostream *ost, const _fmtType &fmt = chalk::fg::White, const _Args&... args) {
-        std::lock_guard<std::mutex> lk{(ost == outStream && !this->unified_output_) ? outMutex : errMutex };
         const std::chrono::duration<float> deltaT = tm - ((ost == outStream && !this->unified_output_) ? lastTimes[0] : lastTimes[1]);
         lastTimes[(ost == outStream && !this->unified_output_) ? 0 : 1] = tm;
-        *ost << tsChalk(isoDate(tm)) << "  " << fmt(logN(args...)) << " +" << dtChalk(std::to_string(deltaT.count()) + "s") << std::endl;
+        *ost << (tsChalk(isoDate(tm)) + "  " + fmt(logN(args...)) + " +" + dtChalk(std::to_string(deltaT.count()) + "s") + "\n");
         return *ost;
     }
     template<typename _Arg0, typename ...Args>
@@ -93,7 +91,6 @@ protected:
 private:
     std::ostream *outStream, *errStream;
     std::chrono::time_point<std::chrono::system_clock> lastTimes[2] { std::chrono::system_clock::now(), std::chrono::system_clock::now() };
-    inline static std::mutex outMutex, errMutex;
 
     bool unified_output_ = false;
     Verbosity verbosity_ = Verbosity::DEBUG;
