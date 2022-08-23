@@ -138,16 +138,6 @@ consteval const char *_basename(const char (&path)[N]) {
     if (path[i] == '/') break;
   return &(path[i + 1]);
 }
-// struct _basename {
-//   char basename_[N];
-//   consteval _basename(const char (&path)[N]) {
-//     for (auto i = N - 1; i > 0; ++i)
-//       if (path[i] == '/') break;
-//     auto *pbase = _basename;
-//     for (auto *cp = &path + i; cp <= &path + N; ++cp) *pbase++ = *cp;
-//   }
-//   constexpr operator const char *() const { return basename_; }
-// }
 #else
 inline const char *_basename(const char *path) {
   const char *p = path + strlen(path);
