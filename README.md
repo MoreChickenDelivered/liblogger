@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
 
 	auto hd_logfile = std::ofstream{std::to_string(std::time(nullptr)) + ".txt"};
 	auto hd_logger = Logger{hd_logfile, hd_logfile};
-	hd_logger.setVerbosity(Logger::Verbosity::TRACE);
+	hd_logger.setVerbosity(Logger::Verbosity::kTrace);
 
 	struct randInts {
 		randInts() = default;
