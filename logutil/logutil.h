@@ -1,5 +1,5 @@
 //
-// (C) 2019 TT.io
+// (C) 2019,2023 Elias Benali, TT.io
 // Author: Elias Benali <ebenali@tradeterminal.io>
 // Created by deb on 11/23/19.
 //
@@ -9,8 +9,12 @@
 
 #include <chalk/chalk.h>
 #include <date/date.h>
+#include <fcntl.h>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <iostream>
@@ -30,38 +34,38 @@ struct Logger {
   template <typename... _Args>
   auto Info(const _Args &...args) -> std::ostream & {
     return (verbosity_ >= Verbosity::kInfo)
-               ? output(std::chrono::system_clock::now(), outStream_, kInfoChalk,
-                        "[II]", args...)
+               ? output(std::chrono::system_clock::now(), outStream_,
+                        kInfoChalk, "[II]", args...)
                : *outStream_;
   }
 
   template <typename... _Args>
   auto Warn(const _Args &...args) -> std::ostream & {
     return (verbosity_ >= Verbosity::kWarn)
-               ? output(std::chrono::system_clock::now(), outStream_, kWarnChalk,
-                        "[WW]", args...)
+               ? output(std::chrono::system_clock::now(), outStream_,
+                        kWarnChalk, "[WW]", args...)
                : *outStream_;
   }
 
   template <typename... _Args>
   auto Error(const _Args &...args) -> std::ostream & {
     return (verbosity_ >= Verbosity::kErr)
-               ? output(std::chrono::system_clock::now(), errStream_, kErrorChalk,
-                        "[EE]", args...)
+               ? output(std::chrono::system_clock::now(), errStream_,
+                        kErrorChalk, "[EE]", args...)
                : *errStream_;
   }
   template <typename... _Args>
   auto Debug(const _Args &...args) -> std::ostream & {
     return (verbosity_ >= Verbosity::kDebug)
-               ? output(std::chrono::system_clock::now(), errStream_, kDebugChalk,
-                        "[DD]", args...)
+               ? output(std::chrono::system_clock::now(), errStream_,
+                        kDebugChalk, "[DD]", args...)
                : *errStream_;
   }
   template <typename... _Args>
   auto Trace(const _Args &...args) -> std::ostream & {
     return (verbosity_ >= Verbosity::kTrace)
-               ? output(std::chrono::system_clock::now(), errStream_, kTraceChalk,
-                        "[TT]", args...)
+               ? output(std::chrono::system_clock::now(), errStream_,
+                        kTraceChalk, "[TT]", args...)
                : *errStream_;
   }
 
@@ -85,7 +89,7 @@ struct Logger {
       -> std::ostream & {
     const std::chrono::duration<float> delta_t =
         tm - ((ost == outStream_ && !this->unified_output_) ? lastTimes_[0]
-                                                           : lastTimes_[1]);
+                                                            : lastTimes_[1]);
     lastTimes_[(ost == outStream_ && !this->unified_output_) ? 0 : 1] = tm;
     *ost << (kTsChalk(isoDate(tm)) + "  " + fmt(logN(args...)) + " +" +
              kDtChalk(std::to_string(delta_t.count()) + "s") + "\n");
@@ -124,7 +128,48 @@ struct Logger {
    */
   static auto get() noexcept -> Logger & {
     try {
-      static std::unique_ptr<Logger> singleton = std::make_unique<Logger>();
+      static std::shared_ptr<Logger> singleton = []() {
+        auto mypid = getpid();
+        constexpr auto kSzLogger = sizeof(std::shared_ptr<Logger>);
+        if (int shm_fd = shm_open(fmt::format("/{}-logger", mypid).c_str(),
+                                  O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
+            shm_fd != -1) {
+          ftruncate(shm_fd, kSzLogger);
+          auto new_logger = std::make_shared<Logger>();
+          auto *plogger = static_cast<std::shared_ptr<Logger> *>(
+              mmap(nullptr, kSzLogger, PROT_READ | PROT_WRITE, MAP_SHARED,
+                   shm_fd, 0));
+          if (plogger == MAP_FAILED)
+            throw std::runtime_error{fmt::format("shmlog mmap fail")};
+          *plogger = new_logger;
+          close(shm_fd);
+          // std::clog << fmt::format(
+          //     "save logger shmem@/{}-logger; ptr={:p}; sptr.p={:p}\n", mypid,
+          //     (void *)(plogger), (void *)plogger->get());
+          munmap(plogger, kSzLogger);
+          return new_logger;
+        } else if (int shm_fd =
+                       shm_open(fmt::format("/{}-logger", mypid).c_str(),
+                                O_RDWR, S_IRUSR | S_IWUSR);
+                   shm_fd != -1) {
+          auto *plogger = static_cast<std::shared_ptr<Logger> *>(
+              mmap(nullptr, kSzLogger, PROT_READ | PROT_WRITE, MAP_SHARED,
+                   shm_fd, 0));
+          if (plogger == MAP_FAILED)
+            throw std::runtime_error{fmt::format("shmlog mmap fail")};
+          close(shm_fd);
+          auto prev_logger = *plogger;
+          // std::clog << fmt::format(
+          //     "restore logger shmem@/{}-logger; ptr={:p}; sptr.p={:p}\n",
+          //     mypid, (void *)(plogger), (void *)plogger->get());
+          munmap(plogger, kSzLogger);
+          return prev_logger;
+        } else {
+          throw std::runtime_error{fmt::format("shm logger open: {}{}{}",
+                                               __FILE__, __LINE__, __func__)};
+        }
+        // return std::make_unique<Logger>();
+      }();
       return *singleton;
     } catch (std::exception const &err) {
       std::cerr << fmt::format(
