@@ -199,7 +199,7 @@ struct SlackMessenger {
     auto cl = curl_easy_init();
     if (!cl) throw std::runtime_error{"curl init failure (curl_easy_init)"};
     struct curl_slist *hdrs = nullptr;
-    auto slack_webhook = msg["slack_webhook"].get<std::string>();
+    auto const slack_webhook = msg["slack_webhook"].get<std::string>();
     msg.erase("slack_webhook");
     auto const serialized = msg.dump();
     hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
