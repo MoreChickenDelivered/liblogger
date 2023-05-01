@@ -73,7 +73,8 @@ struct SlackMessenger {
    *  'text' is markdown formatted
    */
   void send(std::string const &title, std::string const &body,
-            Severity level = Severity::INFO, bool sync = false) {
+            Severity level = Severity::INFO, bool sync = false,
+            bool is_warning = false) {
     if (default_severity_ < level) return;
     while (!thread_initialized_)
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -113,6 +114,8 @@ struct SlackMessenger {
                           .count()},
                  },
              }},
+            {"slack_webhook",
+             is_warning ? slack_warning_webhook_ : slack_webhook_},
         },
         sync);
     if (sync) {
@@ -194,10 +197,12 @@ struct SlackMessenger {
   void send_slack(nlohmann::json msg) {
     auto cl = curl_easy_init();
     if (!cl) throw std::runtime_error{"curl init failure (curl_easy_init)"};
-    auto const serialized = msg.dump();
     struct curl_slist *hdrs = nullptr;
+    auto const slack_webhook = msg["slack_webhook"].get<std::string>();
+    msg.erase("slack_webhook");
+    auto const serialized = msg.dump();
     hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
-    curl_easy_setopt(cl, CURLOPT_URL, slack_webhook_.c_str());
+    curl_easy_setopt(cl, CURLOPT_URL, slack_webhook.c_str());
     curl_easy_setopt(cl, CURLOPT_POSTFIELDS, serialized.c_str());
     curl_easy_setopt(cl, CURLOPT_POSTFIELDSIZE, serialized.size());
     curl_easy_setopt(cl, CURLOPT_HTTPHEADER, hdrs);
@@ -219,6 +224,9 @@ struct SlackMessenger {
   std::string slack_webhook_;
   std::string slack_botname_;
   std::string slack_botlink_;
+  const std::string slack_warning_webhook_ =
+      "https://hooks.slack.com/services/TMHFVT43G/B0567ME6E9W/"
+      "Hb1FHrJ4rFFS7LlkrALRlFN2";  // hft-binance-dev-warn
   std::string slack_boticon_;
   std::thread slack_dispatch_thread_;
   std::function<std::string()> optional_footer_ = nullptr;
