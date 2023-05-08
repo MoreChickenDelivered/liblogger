@@ -61,6 +61,8 @@ if(LIBLOGGER_COMPILE_EXAMPLE)
 	add_executable(liblogger-example logutil/logutil_example.cc)
 	target_link_libraries(liblogger-example PRIVATE liblogger)
 	set_target_properties(liblogger-example PROPERTIES OUTPUT_NAME logutil_example)
+	add_library(example_dylib SHARED logutil/logutil_example_dylib.cc)
+	target_link_libraries(example_dylib PRIVATE liblogger)
 endif()
 
 #option(LIBLOGGER_INSTALL "Install liblogger" ON)
