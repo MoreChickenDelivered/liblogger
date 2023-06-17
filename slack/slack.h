@@ -79,6 +79,13 @@ struct SlackMessenger {
     while (!thread_initialized_)
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     std::unique_lock<std::mutex> lk;
+    if (last_sending_time_.count(title) > 0 &&
+        std::chrono::system_clock::now() - last_sending_time_[title] <
+            std::chrono::milliseconds(100)) {
+      return;
+    }
+    last_sending_time_[title] = std::chrono::system_clock::now();
+
     if (sync) lk = std::unique_lock<std::mutex>{slack_queue_mtx_};
     enqueue_slack(
         nlohmann::json{
@@ -230,7 +237,8 @@ struct SlackMessenger {
   std::string slack_boticon_;
   std::thread slack_dispatch_thread_;
   std::function<std::string()> optional_footer_ = nullptr;
-
+  std::map<std::string, std::chrono::system_clock::time_point>
+      last_sending_time_;
   Severity default_severity_ = Severity::DEBUG;
 };
 
