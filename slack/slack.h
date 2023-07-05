@@ -80,12 +80,12 @@ struct SlackMessenger {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     std::unique_lock<std::mutex> lk;
     if (last_sending_time_.count(title) > 0 &&
-        std::chrono::system_clock::now() - last_sending_time_[title] <
+        (std::chrono::system_clock::now() - last_sending_time_[title]) <
             std::chrono::milliseconds(100)) {
       return;
     }
-    last_sending_time_[title] = std::chrono::system_clock::now();
 
+    last_sending_time_[title] = std::chrono::system_clock::now();
     if (sync) lk = std::unique_lock<std::mutex>{slack_queue_mtx_};
     enqueue_slack(
         nlohmann::json{
