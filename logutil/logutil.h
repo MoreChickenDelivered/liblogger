@@ -10,13 +10,12 @@
 #include <chalk/chalk.h>
 #include <date/date.h>
 #include <fcntl.h>
-#include <fmt/format.h>
-#include <fmt/ostream.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <chrono>
+#include <format>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -131,7 +130,7 @@ struct Logger {
       static std::shared_ptr<Logger> singleton = []() {
         auto mypid = getpid();
         constexpr auto kSzLogger = sizeof(std::shared_ptr<Logger>);
-        if (int shm_fd = shm_open(fmt::format("/{}-logger", mypid).c_str(),
+        if (int shm_fd = shm_open(std::format("/{}-logger", mypid).c_str(),
                                   O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
             shm_fd != -1) {
           ftruncate(shm_fd, kSzLogger);
@@ -140,39 +139,39 @@ struct Logger {
               mmap(nullptr, kSzLogger, PROT_READ | PROT_WRITE, MAP_SHARED,
                    shm_fd, 0));
           if (plogger == MAP_FAILED)
-            throw std::runtime_error{fmt::format("shmlog mmap fail")};
+            throw std::runtime_error{std::format("shmlog mmap fail")};
           *plogger = new_logger;
           close(shm_fd);
-          // std::clog << fmt::format(
+          // std::clog << std::format(
           //     "save logger shmem@/{}-logger; ptr={:p}; sptr.p={:p}\n", mypid,
           //     (void *)(plogger), (void *)plogger->get());
           munmap(plogger, kSzLogger);
           return new_logger;
         } else if (int shm_fd =
-                       shm_open(fmt::format("/{}-logger", mypid).c_str(),
+                       shm_open(std::format("/{}-logger", mypid).c_str(),
                                 O_RDWR, S_IRUSR | S_IWUSR);
                    shm_fd != -1) {
           auto *plogger = static_cast<std::shared_ptr<Logger> *>(
               mmap(nullptr, kSzLogger, PROT_READ | PROT_WRITE, MAP_SHARED,
                    shm_fd, 0));
           if (plogger == MAP_FAILED)
-            throw std::runtime_error{fmt::format("shmlog mmap fail")};
+            throw std::runtime_error{std::format("shmlog mmap fail")};
           close(shm_fd);
           auto prev_logger = *plogger;
-          // std::clog << fmt::format(
+          // std::clog << std::format(
           //     "restore logger shmem@/{}-logger; ptr={:p}; sptr.p={:p}\n",
           //     mypid, (void *)(plogger), (void *)plogger->get());
           munmap(plogger, kSzLogger);
           return prev_logger;
         } else {
-          throw std::runtime_error{fmt::format("shm logger open: {}{}{}",
+          throw std::runtime_error{std::format("shm logger open: {}{}{}",
                                                __FILE__, __LINE__, __func__)};
         }
         // return std::make_unique<Logger>();
       }();
       return *singleton;
     } catch (std::exception const &err) {
-      std::cerr << fmt::format(
+      std::cerr << std::format(
           "{}:{}:{}: caught exception while constructing Logger singleton: "
           "{}\n",
           __FILE__, __LINE__, __func__, err.what());
@@ -202,25 +201,25 @@ inline const char *_basename(const char *path) {
 using namespace std::string_literals;
 #define INFO(_fmt, ...)                                            \
   do {                                                             \
-    logger.Info(fmt::format("[{}:{}:{}]: " _fmt, __func__,         \
+    logger.Info(std::format("[{}:{}:{}]: " _fmt, __func__,         \
                             _basename(__FILE__),                   \
                             __LINE__ __VA_OPT__(, ) __VA_ARGS__)); \
   } while (false);
 #define ERROR(_fmt, ...)                                            \
   do {                                                              \
-    logger.Error(fmt::format("[{}:{}:{}]: " _fmt, __func__,         \
+    logger.Error(std::format("[{}:{}:{}]: " _fmt, __func__,         \
                              _basename(__FILE__),                   \
                              __LINE__ __VA_OPT__(, ) __VA_ARGS__)); \
   } while (false);
 #define WARN(_fmt, ...)                                            \
   do {                                                             \
-    logger.Warn(fmt::format("[{}:{}:{}]: " _fmt, __func__,         \
+    logger.Warn(std::format("[{}:{}:{}]: " _fmt, __func__,         \
                             _basename(__FILE__),                   \
                             __LINE__ __VA_OPT__(, ) __VA_ARGS__)); \
   } while (false);
 #define DEBUG(_fmt, ...)                                            \
   do {                                                              \
-    logger.Debug(fmt::format("[{}:{}:{}]: " _fmt, __func__,         \
+    logger.Debug(std::format("[{}:{}:{}]: " _fmt, __func__,         \
                              _basename(__FILE__),                   \
                              __LINE__ __VA_OPT__(, ) __VA_ARGS__)); \
   } while (false);
@@ -231,7 +230,7 @@ using namespace std::string_literals;
 #else
 #define TRACE(_fmt, ...)                                            \
   do {                                                              \
-    logger.Trace(fmt::format("[{}:{}:{}]: " _fmt, __func__,         \
+    logger.Trace(std::format("[{}:{}:{}]: " _fmt, __func__,         \
                              _basename(__FILE__),                   \
                              __LINE__ __VA_OPT__(, ) __VA_ARGS__)); \
   } while (false);

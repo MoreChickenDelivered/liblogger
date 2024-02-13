@@ -3,14 +3,13 @@
  *  C++17 header-only sync/async slack messaging library (webhook based,
  * markdown) Offers a singleton 'default_messenger': Slack::get() or
  * Slack::SlackMessenger::get() Uses Linux-specific /proc/stat Dependencies:
- * cURL, hhinnant date, libfmt, nlohmann::json 2020-12-07
+ * cURL, hhinnant date, nlohmann::json 2020-12-07
  */
 #pragma once
 
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <date/date.h>
-#include <fmt/format.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -41,7 +40,7 @@ struct SlackMessenger {
         slack_boticon_{std::move(boticon)} {
     if (slack_webhook_.empty())
       throw std::runtime_error{
-          fmt::format("{}: webhook URL can not be empty", __func__)};
+          std::format("{}: webhook URL can not be empty", __func__)};
     setup_slack();
   }
 
@@ -111,7 +110,7 @@ struct SlackMessenger {
                      {"title", title},
                      {"text", body},
                      {"footer",
-                      fmt::format("pid {}; {}{}", getpid(),
+                      std::format("pid {}; {}{}", getpid(),
                                   SlackMessenger::proc_stat(),
                                   optional_footer_ ? optional_footer_()
                                                    : std::string{})},
@@ -185,7 +184,7 @@ struct SlackMessenger {
     fscanf(fp, "%lu %lu %lu %lu %lu %lu %lu", &f_size, &f_resident, &f_shared,
            &f_text, &f_lib, &f_data, &f_dt);
     const auto pg_sz = sysconf(_SC_PAGESIZE);
-    return fmt::format("VM: {:.2f}M; RSS: {:.2f}M",
+    return std::format("VM: {:.2f}M; RSS: {:.2f}M",
                        f_size * pg_sz / double(1 << 20),
                        f_resident * pg_sz / double(1 << 20));
   }
@@ -214,7 +213,7 @@ struct SlackMessenger {
     curl_easy_setopt(cl, CURLOPT_POSTFIELDSIZE, serialized.size());
     curl_easy_setopt(cl, CURLOPT_HTTPHEADER, hdrs);
     if (auto res = curl_easy_perform(cl); res != CURLE_OK) {
-      std::cerr << fmt::format("curl HTTP req errored out: {}\n",
+      std::cerr << std::format("curl HTTP req errored out: {}\n",
                                curl_easy_strerror(res));
       std::cerr.flush();
     }

@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <format>
 #include <fstream>
 
 #include "logutil.h"
@@ -39,10 +40,10 @@ int main(int argc, char *argv[]) {
 
   std::for_each(
       randInts(5), randInts(), [&](int i) {  // by-ref capture for 'logger'
-        // raw lines, console.debug alike, does not support fmt::format syntax
+        // raw lines, console.debug alike, does not support std::format syntax
         hd_logger.Trace("random integer:", i);
-        // using fmt::format
-        hd_logger.Trace(fmt::format("hig-res timestamp: {}ns",
+        // using std::format
+        hd_logger.Trace(std::format("hig-res timestamp: {}ns",
                                     std::chrono::high_resolution_clock::now()
                                         .time_since_epoch()
                                         .count()));
@@ -58,11 +59,11 @@ int main(int argc, char *argv[]) {
   TRACE("current dir: {}", std::filesystem::current_path().native());
   auto *dlhandle = dlopen("./libexample_dylib.so", RTLD_NOW | RTLD_GLOBAL);
   if (!dlhandle)
-    throw std::runtime_error(fmt::format("dlopen failed: {}", dlerror()));
+    throw std::runtime_error(std::format("dlopen failed: {}", dlerror()));
   void (*libmain_fn)() =
       reinterpret_cast<void (*)()>(dlsym(dlhandle, "libmain"));
   if (!libmain_fn)
-    throw std::runtime_error(fmt::format("dlsym failed: {}", dlerror()));
+    throw std::runtime_error(std::format("dlsym failed: {}", dlerror()));
   libmain_fn();
   dlclose(dlhandle);
 }
