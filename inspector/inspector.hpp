@@ -194,8 +194,7 @@ class INTST {
   void save_state_and_reset(double timestamp) {
     this->kwargs["era"] = era++;
 
-    static thread_local auto fmted_state_line =
-        this->kwargs.dump(-1)) + "\n";
+    static thread_local auto fmted_state_line = this->kwargs.dump(-1) + "\n";
 
     while (kwargs_mutex_->test_and_set(std::memory_order_acquire)) {
       while (kwargs_mutex_->test(std::memory_order_relaxed)) {
@@ -231,7 +230,7 @@ class INTST {
    *
    * @return The singleton instance of INTST.
    */
-  static auto get(nlohmann::json const *config) noexcept {
+  static std::shared_ptr<INTST> get(nlohmann::json const *config) noexcept {
     try {
       const static std::shared_ptr<INTST> kSingleton = [&]() {
         const auto mypid = getpid();
@@ -340,7 +339,7 @@ class INTST {
             "{}:{}:{}: shm_open(path='/{}-intst') failed: {}", __FILE__,
             __LINE__, __PRETTY_FUNCTION__, mypid, ::strerror(errno))};
       }();
-      return *kSingleton;
+      return kSingleton;
     } catch (std::exception const &err) {
       std::cerr << std::format(
           "{}:{}:{}: caught exception while constructing INTST singleton: "

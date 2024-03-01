@@ -30,6 +30,10 @@ if (NOT TARGET date::date)
 	endif()
 endif()
 
+if(DEFINED ENV{VCPKG_ROOT})
+	execute_process(COMMAND "$ENV{VCPKG_ROOT}/vcpkg" install boost-iostreams boost-iostreams[lzma] liblzma)
+endif()
+
 message(STATUS "[liblogger] Using system C++20 std::format")
 
 if (NOT TARGET Threads::Threads)
@@ -39,7 +43,13 @@ endif()
 set(CURL_LIBRARY "-lcurl")
 find_package(CURL REQUIRED)
 
-target_link_libraries(liblogger INTERFACE chalk::chalk date::date Threads::Threads ${CURL_LIBRARIES})
+find_package(Boost REQUIRED COMPONENTS iostreams)
+
+target_link_libraries(liblogger INTERFACE
+	chalk::chalk date::date
+	Threads::Threads ${CURL_LIBRARIES}
+	Boost::boost Boost::iostreams
+	)
 target_include_directories(liblogger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}> $<INSTALL_INTERFACE:include/liblogger>)
 #target_compile_options(liblogger INTERFACE ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations)
 target_sources(liblogger INTERFACE
