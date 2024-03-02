@@ -226,7 +226,7 @@ class INTST {
    *     - "save_internal_state": Enable saving internal state.
    *     - "save_internal_state_compress": Compression format for the
    *       saved internal state (optional).
-   *     - "dump_dir": Directory to save the internal state dump (optional).
+   *     - "save_internal_state_basedir": Directory to save the internal state dump (optional).
    *
    * @return The singleton instance of INTST.
    */
@@ -274,8 +274,8 @@ class INTST {
 
           // Get the dump directory from the config
           auto const dump_dir =
-              config->contains("dump_dir")
-                  ? (*config)["dump_dir"].get<std::string_view>()
+              config->contains("save_internal_state_basedir")
+                  ? (*config)["save_internal_state_basedir"].get<std::string_view>()
                   : "/tmp";
 
           // Generate the filename for the internal state dump
