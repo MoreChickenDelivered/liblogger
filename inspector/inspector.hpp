@@ -29,6 +29,11 @@
 
 #include "../logutil/logutil.h"
 
+static FILE *const kCons = []() {
+  const int cons_fd = open("/dev/tty", O_WRONLY);
+  return cons_fd > -1 ? fdopen(cons_fd, "w") : stdout;
+}();
+
 /**
  * @class INTST
  * @brief The INTST class represents an inspector that logs and saves internal
@@ -64,11 +69,6 @@ class INTST {
       std::make_shared<std::deque<nlohmann::json>>();
   std::shared_ptr<std::thread> logger_thread_ = nullptr;
 
-  FILE *cons_ = []() {
-    const int cons_fd = open("/dev/tty", O_WRONLY);
-    return cons_fd > -1 ? fdopen(cons_fd, "w") : stdout;
-  }();
-
   ~INTST() {
     // if (this->internal_snapshot_fd_.has_value())
     //   ::close(this->internal_snapshot_fd_.value());
@@ -85,7 +85,7 @@ class INTST {
     {
       if (!this->logger_thread_)
         this->logger_thread_ = std::make_shared<std::thread>(
-            [=, fd = internal_snapshot_fd_, cons_ = cons_] {
+            [=, this, fdesc = internal_snapshot_fd_, cons = kCons] {
               static thread_local nlohmann::json prev_kwargs{};
               static thread_local nlohmann::json cur_kwargs{};
 
@@ -132,7 +132,7 @@ class INTST {
                   }
 
                   std::optional<uint64_t> era = std::nullopt;
-                  std::optional<std::string> ts = std::nullopt;
+                  std::optional<std::string> cur_ts = std::nullopt;
 
                   if (cur_kwargs.contains("era")) {
                     era = cur_kwargs["era"].get<uint64_t>();
@@ -149,7 +149,7 @@ class INTST {
                         std::chrono::system_clock,
                         std::chrono::system_clock::duration>(chr_ts);
 
-                    ts = isoDate(chr_tp);
+                    cur_ts = isoDate(chr_tp);
 
                     cur_kwargs.erase("timestamp");
                   }
@@ -165,15 +165,15 @@ class INTST {
 
                   auto aug_kwargs = nlohmann::json::array({});
                   if (era.has_value()) aug_kwargs.push_back(era.value());
-                  if (ts.has_value())
-                    aug_kwargs.emplace_back(std::move(ts.value()));
+                  if (cur_ts.has_value())
+                    aug_kwargs.emplace_back(std::move(cur_ts.value()));
                   aug_kwargs.emplace_back(std::move(diff_kwargs));
 
                   auto fmted_kwargs = aug_kwargs.dump() + "\n\n";
-                  *fd << fmted_kwargs;
+                  *fdesc << fmted_kwargs;
 
                   if (era.has_value() && era.value() % kFlushEveryNCycles == 0)
-                    fd->flush();
+                    fdesc->flush();
                 }
               }
 
@@ -181,7 +181,7 @@ class INTST {
               //              "{}: main loop concluded. syncing output if
               //              any...",
               //              __PRETTY_FUNCTION__);
-              fd->flush();
+              fdesc->flush();
             });
       this->logger_thread_->detach();
     }
@@ -226,7 +226,8 @@ class INTST {
    *     - "save_internal_state": Enable saving internal state.
    *     - "save_internal_state_compress": Compression format for the
    *       saved internal state (optional).
-   *     - "save_internal_state_basedir": Directory to save the internal state dump (optional).
+   *     - "save_internal_state_basedir": Directory to save the internal state
+   * dump (optional).
    *
    * @return The singleton instance of INTST.
    */
@@ -260,10 +261,14 @@ class INTST {
           munmap(p_intst, kSzIntSt);
 
           // Check if config is null or if save_internal_state option is present
-          if (config == nullptr || !config->contains("save_internal_state")) {
-            throw std::runtime_error{
-                std::format("{}:{}: pConfig cannot be null on first call",
-                            __FILE__, __LINE__)};
+          if (config == nullptr || !config->contains("save_internal_state") ||
+              !(*config)["save_internal_state"].get<bool>()) {
+            fprintf(kCons, "%s\n",
+                    std::format("{}:{}:{}: internal-state configuration not "
+                                "present or explicitly disabled",
+                                __FILE__, __LINE__, __PRETTY_FUNCTION__)
+                        .c_str());
+            return new_intst;
           }
 
           // Get the compression option from the config
@@ -273,10 +278,10 @@ class INTST {
                               : "";
 
           // Get the dump directory from the config
-          auto const dump_dir =
-              config->contains("save_internal_state_basedir")
-                  ? (*config)["save_internal_state_basedir"].get<std::string_view>()
-                  : "/tmp";
+          auto const dump_dir = config->contains("save_internal_state_basedir")
+                                    ? (*config)["save_internal_state_basedir"]
+                                          .get<std::string_view>()
+                                    : "/tmp";
 
           // Generate the filename for the internal state dump
           auto const fname = std::format("{}/{}-internal.json{}", dump_dir,
