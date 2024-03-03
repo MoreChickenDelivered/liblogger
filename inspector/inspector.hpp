@@ -56,7 +56,8 @@ class INTST {
 
  public:
   uint64_t era = 0;
-  nlohmann::json kwargs{};
+  nlohmann::json kwargs;
+
   // std::optional<int> internal_snapshot_fd_ = std::nullopt;
   std::shared_ptr<boost::iostreams::filtering_ostream> internal_snapshot_fd_{
       nullptr};
