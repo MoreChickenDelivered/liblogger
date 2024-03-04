@@ -293,7 +293,7 @@ class INTST {
           out_stdfile = std::make_unique<std::ofstream>(
               fname, std::ios::out | std::ios::trunc | std::ios::binary);
 
-          if (!out_stdfile || out_stdfile.get())
+          if (!out_stdfile || !*out_stdfile)
             throw std::runtime_error{
                 std::format("{}:{}: can't create file {}: {}", __FILE__,
                             __LINE__, fname, ::strerror(errno))};
