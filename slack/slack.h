@@ -26,10 +26,10 @@
 
 namespace Slack {
 enum class Severity {
-  INFO,
-  ERROR,
-  WARN,
-  DEBUG,
+  kInfo,
+  kError,
+  kWarn,
+  kDebug,
 };
 
 struct SlackMessenger {
@@ -61,9 +61,9 @@ struct SlackMessenger {
   }
 
   ~SlackMessenger() {
-    std::unique_lock lk{slack_queue_mtx_};
+    std::unique_lock lock{slack_queue_mtx_};
     thread_bail_out_ = true;
-    lk.unlock();
+    lock.unlock();
     slack_queue_cnd_.notify_one();
     slack_dispatch_thread_.join();
   }
@@ -73,30 +73,30 @@ struct SlackMessenger {
    *  'text' is markdown formatted
    */
   void send(std::string const &title, std::string const &body,
-            Severity level = Severity::INFO, bool sync = false,
+            Severity level = Severity::kInfo, bool sync = false,
             bool is_warning = false) {
     if (default_severity_ < level) return;
     while (!thread_initialized_)
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    std::unique_lock<std::mutex> lk;
-    if (last_sending_time_.count(title) > 0 &&
+    std::unique_lock<std::mutex> lock;
+    if (last_sending_time_.contains(title) &&
         (std::chrono::system_clock::now() - last_sending_time_[title]) <
             std::chrono::milliseconds(100)) {
       return;
     }
 
     last_sending_time_[title] = std::chrono::system_clock::now();
-    if (sync) lk = std::unique_lock<std::mutex>{slack_queue_mtx_};
+    if (sync) lock = std::unique_lock<std::mutex>{slack_queue_mtx_};
     enqueue_slack(
         nlohmann::json{
             {"attachments",
              std::vector<nlohmann::json>{
                  {
                      {"mrkdwn_in", {"text"}},
-                     {"color", level == Severity::INFO    ? "#beef33"
-                               : level == Severity::ERROR ? "#ff0000"
-                               : level == Severity::WARN  ? "#eaaa22"
-                                                          : "#888888"},
+                     {"color", level == Severity::kInfo    ? "#beef33"
+                               : level == Severity::kError ? "#ff0000"
+                               : level == Severity::kWarn  ? "#eaaa22"
+                                                           : "#888888"},
                      {"author_name", slack_botname_.empty()
                                          ? "<unspecific-bot-name>"
                                          : slack_botname_},
@@ -126,11 +126,11 @@ struct SlackMessenger {
         },
         sync);
     if (sync) {
-      lk.unlock();
+      lock.unlock();
       slack_queue_cnd_.notify_one();
-      lk.lock();
+      lock.lock();
       if (!slack_queue_.empty())
-        slack_empty_cnd_.wait(lk, [&] { return slack_queue_.empty(); });
+        slack_empty_cnd_.wait(lock, [&] { return slack_queue_.empty(); });
     }
   }
 
@@ -154,12 +154,12 @@ struct SlackMessenger {
     slack_dispatch_thread_ = std::thread{[&]() {
       // LOG(INFO) << "Slack message dispatch initialized";
       for (;;) {
-        std::unique_lock lk{slack_queue_mtx_};
+        std::unique_lock lock{slack_queue_mtx_};
 
         thread_initialized_ = true;
 
         slack_queue_cnd_.wait(
-            lk, [&] { return thread_bail_out_ || !slack_queue_.empty(); });
+            lock, [&] { return thread_bail_out_ || !slack_queue_.empty(); });
         if (thread_bail_out_) break;
 
         // auto t_0 = std::chrono::system_clock::now();
@@ -171,75 +171,95 @@ struct SlackMessenger {
           // std::chrono::seconds(1)) 	break;
         }
 
-        lk.unlock();
+        lock.unlock();
         slack_empty_cnd_.notify_all();
       }
     }};
   }
 
   static std::string proc_stat() {
-    struct stat st;
-    if (stat("/proc/self/statm", &st) != 0) return "";
-    FILE *fp = fopen("/proc/self/statm", "r");
-    unsigned long f_size, f_resident, f_shared, f_text, f_lib, f_data, f_dt;
-    fscanf(fp, "%lu %lu %lu %lu %lu %lu %lu", &f_size, &f_resident, &f_shared,
-           &f_text, &f_lib, &f_data, &f_dt);
+    struct stat statbuf;
+    if (stat("/proc/self/statm", &statbuf) != 0) return "";
+    FILE *fptr = fopen("/proc/self/statm", "r");
+
+    uint64_t f_size;
+    uint64_t f_resident;
+    uint64_t f_shared;
+    uint64_t f_text;
+    uint64_t f_lib;
+    uint64_t f_data;
+    uint64_t f_dt;
+
+    (void)fscanf(fptr, "%lu %lu %lu %lu %lu %lu %lu", &f_size, &f_resident,
+                 &f_shared, &f_text, &f_lib, &f_data, &f_dt);
+
     const auto pg_sz = sysconf(_SC_PAGESIZE);
+    constexpr auto kOneMegabyte = static_cast<double>(1 << 20);
+
     return std::format("VM: {:.2f}M; RSS: {:.2f}M",
-                       f_size * pg_sz / double(1 << 20),
-                       f_resident * pg_sz / double(1 << 20));
+                       static_cast<double>(f_size * pg_sz) / kOneMegabyte,
+                       static_cast<double>(f_resident * pg_sz) / kOneMegabyte);
   }
 
   void enqueue_slack(nlohmann::json msg, bool locked = false) {
     // std::unique_lock lk{slack_queue_mtx_};
-    std::unique_lock<std::mutex> lk;
-    if (!locked) lk = std::unique_lock<std::mutex>{slack_queue_mtx_};
+    std::unique_lock<std::mutex> lock;
+    if (!locked) lock = std::unique_lock<std::mutex>{slack_queue_mtx_};
     slack_queue_.emplace_back(std::move(msg));
     if (!locked) {
-      lk.unlock();
+      lock.unlock();
       slack_queue_cnd_.notify_one();
     }
   }
 
-  void send_slack(nlohmann::json msg) {
-    auto cl = curl_easy_init();
-    if (!cl) throw std::runtime_error{"curl init failure (curl_easy_init)"};
+  static void send_slack(nlohmann::json msg) {
+    auto *curl = curl_easy_init();
+    if (!curl) throw std::runtime_error{"curl init failure (curl_easy_init)"};
     struct curl_slist *hdrs = nullptr;
     auto const slack_webhook = msg["slack_webhook"].get<std::string>();
     msg.erase("slack_webhook");
     auto const serialized = msg.dump();
     hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
-    curl_easy_setopt(cl, CURLOPT_URL, slack_webhook.c_str());
-    curl_easy_setopt(cl, CURLOPT_POSTFIELDS, serialized.c_str());
-    curl_easy_setopt(cl, CURLOPT_POSTFIELDSIZE, serialized.size());
-    curl_easy_setopt(cl, CURLOPT_HTTPHEADER, hdrs);
-    if (auto res = curl_easy_perform(cl); res != CURLE_OK) {
+    curl_easy_setopt(curl, CURLOPT_URL, slack_webhook.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, serialized.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, serialized.size());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+    if (auto res = curl_easy_perform(curl); res != CURLE_OK) {
       std::cerr << std::format("curl HTTP req errored out: {}\n",
                                curl_easy_strerror(res));
       std::cerr.flush();
     }
     curl_slist_free_all(hdrs);
-    curl_easy_cleanup(cl);
+    curl_easy_cleanup(curl);
   }
 
   std::vector<nlohmann::json> slack_queue_;
+
   std::condition_variable slack_queue_cnd_;
   std::condition_variable slack_empty_cnd_;
+
   std::atomic<bool> thread_bail_out_ = false;
   std::atomic<bool> thread_initialized_ = false;
+
   std::mutex slack_queue_mtx_;
+
   std::string slack_webhook_;
   std::string slack_botname_;
   std::string slack_botlink_;
+
   const std::string slack_warning_webhook_ =
       "https://hooks.slack.com/services/TMHFVT43G/B0567ME6E9W/"
       "Hb1FHrJ4rFFS7LlkrALRlFN2";  // hft-binance-dev-warn
+
   std::string slack_boticon_;
   std::thread slack_dispatch_thread_;
+
   std::function<std::string()> optional_footer_ = nullptr;
+
   std::map<std::string, std::chrono::system_clock::time_point>
       last_sending_time_;
-  Severity default_severity_ = Severity::DEBUG;
+
+  Severity default_severity_ = Severity::kDebug;
 };
 
 static std::shared_ptr<SlackMessenger> get(nlohmann::json const *config) {
