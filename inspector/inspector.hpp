@@ -13,6 +13,7 @@
 #include <boost/iostreams/filtering_stream.hpp>
 #include <cerrno>
 #include <chrono>
+#include <cpptrace.hpp>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -292,9 +293,19 @@ class INTST {
               !(*config)["save_internal_state"].get<bool>()) {
             fprintf(kCons, "%s\n",
                     std::format("{}:{}:{}: internal-state configuration not "
-                                "present or explicitly disabled",
-                                __FILE__, __LINE__, __PRETTY_FUNCTION__)
+                                "present or explicitly disabled: {}",
+                                __FILE__, __LINE__, __PRETTY_FUNCTION__,
+                                config ? config->dump() : "null")
                         .c_str());
+
+            auto btrace = cpptrace::generate_trace();
+
+            int line_count = 0;
+            for (auto &btentry : btrace) {
+              auto bt_line = btentry.to_string();
+              fprintf(kCons, "[INTST] %d: %s\n", ++line_count, bt_line.c_str());
+            }
+
             return new_intst;
           }
 
