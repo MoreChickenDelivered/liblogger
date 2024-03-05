@@ -31,7 +31,7 @@ if (NOT TARGET date::date)
 endif()
 
 if(DEFINED ENV{VCPKG_ROOT})
-	execute_process(COMMAND "$ENV{VCPKG_ROOT}/vcpkg" install boost-iostreams boost-iostreams[lzma] liblzma)
+	execute_process(COMMAND "$ENV{VCPKG_ROOT}/vcpkg" install boost-iostreams boost-iostreams[lzma] liblzma bzip2 zstd)
 endif()
 
 message(STATUS "[liblogger] Using system C++20 std::format")
@@ -43,12 +43,24 @@ endif()
 set(CURL_LIBRARY "-lcurl")
 find_package(CURL REQUIRED)
 
+find_package(BZip2 REQUIRED)
+
+find_package(LibLZMA REQUIRED)
+
+find_package(zstd CONFIG REQUIRED)
+
+find_package(ZLIB REQUIRED)
+
 find_package(Boost REQUIRED COMPONENTS iostreams)
 
 target_link_libraries(liblogger INTERFACE
 	chalk::chalk date::date
 	Threads::Threads ${CURL_LIBRARIES}
 	Boost::boost Boost::iostreams
+	LibLZMA::LibLZMA
+	BZip2::BZip2
+	$<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>
+	ZLIB::ZLIB
 	)
 target_include_directories(liblogger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}> $<INSTALL_INTERFACE:include/liblogger>)
 #target_compile_options(liblogger INTERFACE ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations)

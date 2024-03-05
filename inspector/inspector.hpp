@@ -238,6 +238,32 @@ class INTST {
         const auto mypid = getpid();
         constexpr auto kSzIntSt = sizeof(std::shared_ptr<INTST>);
 
+        // If the shared memory segment already exists, restore the previous
+        // instance
+        if (const int shm_fd = shm_open(std::format("/{}-intst", mypid).c_str(),
+                                        O_RDWR, S_IRUSR | S_IWUSR);
+            shm_fd != -1) {
+          auto *p_intst = static_cast<std::shared_ptr<INTST> *>(
+              mmap(nullptr, kSzIntSt, PROT_READ | PROT_WRITE, MAP_SHARED,
+                   shm_fd, 0));
+
+          if (p_intst == MAP_FAILED)
+            throw std::runtime_error{std::format("{}:{}: shm-mmap fail: {}",
+                                                 __FILE__, __LINE__,
+                                                 ::strerror(errno))};
+
+          std::fprintf(kCons,
+                       "%s:%d: INSpector instance restored from shared memory "
+                       "(handle: /%d-intst)\n",
+                       __FILE__, __LINE__, mypid);
+
+          close(shm_fd);
+          auto prev_intst = *p_intst;
+          munmap(p_intst, kSzIntSt);
+
+          return prev_intst;
+        }
+
         // Create a shared memory segment for the singleton instance
         if (const int shm_fd =
                 shm_open(std::format("/{}-intst", mypid).c_str(),
@@ -298,6 +324,9 @@ class INTST {
                 std::format("{}:{}: can't create file {}: {}", __FILE__,
                             __LINE__, fname, ::strerror(errno))};
 
+          fprintf(kCons, "%s:%d: Internal State dumping to: %s\n", __FILE__,
+                  __LINE__, fname.c_str());
+
           // Create a filtering output stream with compression options
           auto out_sbuf =
               std::make_shared<boost::iostreams::filtering_ostream>();
@@ -318,27 +347,6 @@ class INTST {
 
           new_intst->init();
           return new_intst;
-        }
-
-        // If the shared memory segment already exists, restore the previous
-        // instance
-        if (const int shm_fd = shm_open(std::format("/{}-intst", mypid).c_str(),
-                                        O_RDWR, S_IRUSR | S_IWUSR);
-            shm_fd != -1) {
-          auto *p_intst = static_cast<std::shared_ptr<INTST> *>(
-              mmap(nullptr, kSzIntSt, PROT_READ | PROT_WRITE, MAP_SHARED,
-                   shm_fd, 0));
-
-          if (p_intst == MAP_FAILED)
-            throw std::runtime_error{std::format("{}:{}: shm-mmap fail: {}",
-                                                 __FILE__, __LINE__,
-                                                 ::strerror(errno))};
-
-          close(shm_fd);
-          auto prev_intst = *p_intst;
-          munmap(p_intst, kSzIntSt);
-
-          return prev_intst;
         }
 
         throw std::runtime_error{std::format(
