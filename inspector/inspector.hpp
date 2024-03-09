@@ -310,16 +310,18 @@ class INTST {
           }
 
           // Get the compression option from the config
-          auto compress = config->contains("save_internal_state_compress")
-                              ? (*config)["save_internal_state_compress"]
-                                    .get<std::string_view>()
-                              : "";
+          auto compress =
+              config && config->contains("save_internal_state_compress")
+                  ? (*config)["save_internal_state_compress"]
+                        .get<std::string_view>()
+                  : "";
 
           // Get the dump directory from the config
-          auto const dump_dir = config->contains("save_internal_state_basedir")
-                                    ? (*config)["save_internal_state_basedir"]
-                                          .get<std::string_view>()
-                                    : "/tmp";
+          auto const dump_dir =
+              config && config->contains("save_internal_state_basedir")
+                  ? (*config)["save_internal_state_basedir"]
+                        .get<std::string_view>()
+                  : "/tmp";
 
           // Generate the filename for the internal state dump
           auto const fname = std::format("{}/{}-internal.json{}", dump_dir,
