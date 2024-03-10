@@ -24,6 +24,8 @@
 #include <thread>
 #include <vector>
 
+#include "helper.h"
+
 namespace Slack {
 enum class Severity {
   kInfo,
@@ -32,37 +34,54 @@ enum class Severity {
   kDebug,
 };
 
+static inline void from_json(const nlohmann::json &j_in, Severity &severity) {
+  const auto severity_str = helper::getLowerString(j_in);
+  if (severity_str == "info") {
+    severity = Severity::kInfo;
+  } else if (severity_str == "error") {
+    severity = Severity::kError;
+  } else if (severity_str == "warn") {
+    severity = Severity::kWarn;
+  } else if (severity_str == "debug") {
+    severity = Severity::kDebug;
+  } else {
+    throw std::invalid_argument(
+        std::format("{}:{}:{} Invalid severity value (={})", __FILE__, __LINE__,
+                    __func__, severity_str));
+  }
+}
+
 struct SlackMessenger {
-  SlackMessenger(std::string webhook, std::string botname, std::string botlink,
-                 std::string boticon)
+  SlackMessenger(std::string webhook, std::string slack_warning_webhook,
+                 std::string botname, std::string botlink, std::string boticon)
       : slack_webhook_{std::move(webhook)},
+        slack_warning_webhook_{std::move(slack_warning_webhook)},
         slack_botname_{std::move(botname)},
         slack_botlink_{std::move(botlink)},
         slack_boticon_{std::move(boticon)} {
-    if (slack_webhook_.empty())
+    if (slack_webhook_.empty() || slack_warning_webhook_.empty())
       throw std::runtime_error{
-          std::format("{}: webhook URL can not be empty", __func__)};
+          std::format("{}: webhook URL(s) can not be empty", __func__)};
     setup_slack();
   }
 
   explicit SlackMessenger(nlohmann::json const &cfg)
-      : SlackMessenger(cfg.count("webhook") ? cfg["webhook"].get<std::string>()
-                                            : std::string{},
-                       cfg.count("botname") ? cfg["botname"].get<std::string>()
-                                            : std::string{},
-                       cfg.count("botlink") ? cfg["botlink"].get<std::string>()
-                                            : std::string{},
-                       cfg.count("boticon") ? cfg["boticon"].get<std::string>()
-                                            : std::string{}) {
-    if (cfg.count("severity")) {
-      auto const &requested_severity =
-          cfg["severity"].get_ref<std::string const &>();
+      : SlackMessenger(cfg.contains("webhook") ? cfg["webhook"] : "",
+                       cfg.contains("warning_webhook") ? cfg["warning_webhook"]
+                       : cfg.contains("webhook")       ? cfg["webhook"]
+                                                       : "",
+                       cfg.contains("botname") ? cfg["botname"] : "",
+                       cfg.contains("botlink") ? cfg["botlink"] : "",
+                       cfg.contains("boticon") ? cfg["boticon"] : "") {
+    if (cfg.contains("severity")) {
+      default_severity_ = cfg["severity"];
     }
   }
 
   ~SlackMessenger() {
     std::unique_lock lock{slack_queue_mtx_};
     thread_bail_out_ = true;
+    thread_bail_out_.notify_all();
     lock.unlock();
     slack_queue_cnd_.notify_one();
     slack_dispatch_thread_.join();
@@ -76,8 +95,9 @@ struct SlackMessenger {
             Severity level = Severity::kInfo, bool sync = false,
             bool is_warning = false) {
     if (default_severity_ < level) return;
-    while (!thread_initialized_)
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    thread_initialized_.wait(false);
+
     std::unique_lock<std::mutex> lock;
     if (last_sending_time_.contains(title) &&
         (std::chrono::system_clock::now() - last_sending_time_[title]) <
@@ -157,9 +177,11 @@ struct SlackMessenger {
         std::unique_lock lock{slack_queue_mtx_};
 
         thread_initialized_ = true;
+        thread_initialized_.notify_all();
 
         slack_queue_cnd_.wait(
             lock, [&] { return thread_bail_out_ || !slack_queue_.empty(); });
+
         if (thread_bail_out_) break;
 
         // auto t_0 = std::chrono::system_clock::now();
@@ -243,13 +265,11 @@ struct SlackMessenger {
 
   std::mutex slack_queue_mtx_;
 
-  std::string slack_webhook_;
   std::string slack_botname_;
   std::string slack_botlink_;
 
-  const std::string slack_warning_webhook_ =
-      "https://hooks.slack.com/services/TMHFVT43G/B0567ME6E9W/"
-      "Hb1FHrJ4rFFS7LlkrALRlFN2";  // hft-binance-dev-warn
+  std::string slack_webhook_;
+  std::string slack_warning_webhook_;
 
   std::string slack_boticon_;
   std::thread slack_dispatch_thread_;
