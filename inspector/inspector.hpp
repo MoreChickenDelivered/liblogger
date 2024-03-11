@@ -291,13 +291,15 @@ class INTST {
           // Check if config is null or if save_internal_state option is present
           if (config == nullptr || !config->contains("save_internal_state") ||
               !(*config)["save_internal_state"].get<bool>()) {
-            fprintf(kCons, "%s\n",
-                    std::format("{}:{}:{}: internal-state configuration not "
-                                "present or explicitly disabled: {}",
-                                __FILE__, __LINE__, __PRETTY_FUNCTION__,
-                                config ? config->dump() : "null")
-                        .c_str());
+            fprintf(
+                kCons, "%s\n",
+                std::format("{}:{}:{}: internal-state configuration not "
+                            "present or explicitly disabled",
+                            basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                            config ? config->dump() : "null")
+                    .c_str());
 
+#ifndef NDEBUG
             auto btrace = cpptrace::generate_trace();
 
             int line_count = 0;
@@ -305,6 +307,7 @@ class INTST {
               auto bt_line = btentry.to_string();
               fprintf(kCons, "[INTST] %d: %s\n", ++line_count, bt_line.c_str());
             }
+#endif
 
             return new_intst;
           }
