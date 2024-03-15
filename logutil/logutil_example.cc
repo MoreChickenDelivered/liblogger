@@ -12,23 +12,27 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <ranges>
 
 #include "logutil.h"
 
 int main(int argc, char *argv[]) {
   std::srand(std::time(nullptr));
-  auto &logger = Logger::get();  // default logger
+  static auto &logger = Logger::get();  // default logger
 
-  auto hd_logfile = std::ofstream{std::to_string(std::time(nullptr)) + ".txt"};
-  auto hd_logger = Logger{hd_logfile, hd_logfile};
+  std::cout << __FILE__ "\n";
+
+  static auto hd_logfile =
+      std::ofstream{std::to_string(std::time(nullptr)) + ".txt"};
+  static auto hd_logger = Logger{hd_logfile, hd_logfile};
   hd_logger.setVerbosity(Logger::Verbosity::kTrace);
 
-  struct randInts {
-    randInts() = default;
-    explicit randInts(ssize_t n) : n_{n} {}
-    bool operator==(randInts const &rhs) const { return rhs.n_ == n_; }
-    bool operator!=(randInts const &rhs) const { return !(*this == rhs); }
-    randInts &operator++() {
+  struct RandInts {
+    RandInts() = default;
+    explicit RandInts(ssize_t n) : n_{n} {}
+    bool operator==(RandInts const &rhs) const { return rhs.n_ == n_; }
+    bool operator!=(RandInts const &rhs) const { return !(*this == rhs); }
+    RandInts &operator++() {
       --n_;
       return *this;
     }
@@ -38,32 +42,50 @@ int main(int argc, char *argv[]) {
     ssize_t n_{};
   };
 
-  std::for_each(
-      randInts(5), randInts(), [&](int i) {  // by-ref capture for 'logger'
-        // raw lines, console.debug alike, does not support std::format syntax
-        hd_logger.Trace("random integer:", i);
+  (void)std::ranges::for_each(
+      std::views::iota(0, 1) | std::views::transform([](auto) {
+        return std::rand() * ((std::rand() % 2) ? -1 : 1);
+      }),
+      [](int cur_int) {
+        // raw lines, console.debug alike, does not support
+        // std::format syntax
+        hd_logger.Trace("random integer: {}", cur_int);
+
         // using std::format
+        auto pdd = std::chrono::high_resolution_clock::now();
+        dprintf(1, "%zu\n", pdd.time_since_epoch().count());
         hd_logger.Trace(std::format("hig-res timestamp: {}ns",
                                     std::chrono::high_resolution_clock::now()
                                         .time_since_epoch()
                                         .count()));
 
-        // managed logger, pretty prints
-        DEBUG("random int squared: {}", i * i);
-        // will not be output to stderr, since default logger's verbosity is
-        // DEBUG
-        TRACE("random int: {}", i);
+        DEBUG("random int: {}", cur_int);
+        INFO("random int squared: {}", cur_int * cur_int);
       });
 
+  // non-constexpr formatting
+  std::string non_constexpr_format;
+
+  if (std::rand() & 0b1)
+    non_constexpr_format += "camelCase42={}";
+  else
+    non_constexpr_format += "snake_case_42={}";
+
+  INFO(non_constexpr_format, 42);
+
   logger.setVerbosity(Logger::Verbosity::kTrace);
+
   TRACE("current dir: {}", std::filesystem::current_path().native());
+
   auto *dlhandle = dlopen("./libexample_dylib.so", RTLD_NOW | RTLD_GLOBAL);
   if (!dlhandle)
     throw std::runtime_error(std::format("dlopen failed: {}", dlerror()));
-  void (*libmain_fn)() =
-      reinterpret_cast<void (*)()>(dlsym(dlhandle, "libmain"));
+
+  auto *libmain_fn = reinterpret_cast<void (*)()>(dlsym(dlhandle, "libmain"));
   if (!libmain_fn)
     throw std::runtime_error(std::format("dlsym failed: {}", dlerror()));
+
   libmain_fn();
+
   dlclose(dlhandle);
 }
