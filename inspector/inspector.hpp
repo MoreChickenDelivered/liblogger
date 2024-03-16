@@ -151,7 +151,7 @@ class INTST {
                         std::chrono::system_clock,
                         std::chrono::system_clock::duration>(chr_ts);
 
-                    cur_ts = isoDate(chr_tp);
+                    cur_ts = logutil::isoDate(chr_tp);
 
                     cur_kwargs.erase("timestamp");
                   }
@@ -328,7 +328,7 @@ class INTST {
 
           // Generate the filename for the internal state dump
           auto const fname = std::format("{}/{}-internal.json{}", dump_dir,
-                                         isoDate(), compress);
+                                         logutil::isoDate(), compress);
 
           // Create an output file stream for the dump file
           static std::unique_ptr<std::ofstream> out_stdfile{};

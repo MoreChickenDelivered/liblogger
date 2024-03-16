@@ -41,7 +41,7 @@ inline const char *_basename(const char *path) {
 }
 #endif
 
-namespace logger {
+namespace logutil {
 namespace details {
 
 template <typename... Args>
@@ -185,13 +185,14 @@ constexpr auto zatoa(std::string_view str1) {
   return std::move(new_str);
 }
 
-}  // namespace logger
 template <typename Clock = std::chrono::system_clock>
-static inline auto isoDate(std::chrono::time_point<Clock> tp = Clock::now())
+static inline auto isoDate(std::chrono::time_point<Clock> tpt = Clock::now())
     -> std::string {
   return date::format("%FT%TZ",
-                      std::chrono::floor<std::chrono::milliseconds>(tp));
+                      std::chrono::floor<std::chrono::milliseconds>(tpt));
 }
+
+}  // namespace logutil
 
 struct Logger {
   explicit Logger(std::ostream &ost = std::cout, std::ostream &est = std::cerr)
@@ -267,8 +268,8 @@ struct Logger {
 
     lastTimes_[(ost == outStream_ && !this->unified_output_) ? 0 : 1] = tpt;
 
-    *ost << (kTsChalk(isoDate(tpt)) + "  " +
-             fmt(logger::details::fmt_args(
+    *ost << (kTsChalk(logutil::isoDate(tpt)) + "  " +
+             fmt(logutil::details::fmt_args(
                  std::forward<decltype(fmt_str)>(fmt_str),
                  std::forward<Args>(args)...)) +
              " +" + kDtChalk(std::to_string(delta_t.count()) + "s") + "\n");
@@ -404,46 +405,52 @@ struct Logger {
 //            requires { std::type_identity_t<T[sizeof(x) + 1]>{x}; }; \
 //   }())
 
-#define INFO(_fmt, ...)                                                        \
-  do {                                                                         \
-    logger.Info(                                                               \
-        logger::zstrcats(logger::zatoa("["),                                   \
-                         logger::zatoa(logger::PastLastSlash<__FILE__>::kArr), \
-                         logger::zatoa(":" QUOTE(__LINE__) ":"),               \
-                         logger::zatoa(__func__), logger::zatoa("]: [II] "),   \
-                         logger::zatoa(_fmt))                                  \
-                                                                               \
-            .data() __VA_OPT__(, ) __VA_ARGS__);                               \
+#define INFO(_fmt, ...)                                                       \
+  do {                                                                        \
+    logger.Info(logutil::zstrcats(                                            \
+                    logutil::zatoa("["),                                      \
+                    logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
+                    logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
+                    logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [II] "), \
+                    logutil::zatoa(_fmt))                                     \
+                                                                              \
+                    .data() __VA_OPT__(, ) __VA_ARGS__);                      \
   } while (false)
 
 #define ERROR(_fmt, ...)                                                       \
   do {                                                                         \
-    logger.Error(                                                              \
-        logger::zstrcats(logger::zatoa("[" __FILE__ ":" QUOTE(__LINE__) ":"),  \
-                         logger::zatoa(logger::PastLastSlash<__FILE__>::kArr), \
-                         logger::zatoa("]: [EE] "), logger::zatoa(_fmt))       \
+    logger.Error(logutil::zstrcats(                                            \
+                     logutil::zatoa("["),                                      \
+                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
+                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
+                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [EE] "), \
+                     logutil::zatoa(_fmt))                                     \
                                                                                \
-            .data() __VA_OPT__(, ) __VA_ARGS__);                               \
+                     .data() __VA_OPT__(, ) __VA_ARGS__);                      \
   } while (false)
 
-#define WARN(_fmt, ...)                                                        \
-  do {                                                                         \
-    logger.Warn(                                                               \
-        logger::zstrcats(logger::zatoa("[" __func__ ":" QUOTE(__LINE__) ":"),  \
-                         logger::zatoa(logger::PastLastSlash<__FILE__>::kArr), \
-                         logger::zatoa("]: [WW] "), logger::zatoa(_fmt))       \
-                                                                               \
-            .data() __VA_OPT__(, ) __VA_ARGS__);                               \
+#define WARN(_fmt, ...)                                                       \
+  do {                                                                        \
+    logger.Warn(logutil::zstrcats(                                            \
+                    logutil::zatoa("["),                                      \
+                    logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
+                    logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
+                    logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [WW] "), \
+                    logutil::zatoa(_fmt))                                     \
+                                                                              \
+                    .data() __VA_OPT__(, ) __VA_ARGS__);                      \
   } while (false)
 
 #define DEBUG(_fmt, ...)                                                       \
   do {                                                                         \
-    logger.Debug(                                                              \
-        logger::zstrcats(logger::zatoa("[" __FILE__ ":" QUOTE(__LINE__) ":"),  \
-                         logger::zatoa(logger::PastLastSlash<__FILE__>::kArr), \
-                         logger::zatoa("]: [DD] "), logger::zatoa(_fmt))       \
+    logger.Debug(logutil::zstrcats(                                            \
+                     logutil::zatoa("["),                                      \
+                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
+                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
+                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [DD] "), \
+                     logutil::zatoa(_fmt))                                     \
                                                                                \
-            .data() __VA_OPT__(, ) __VA_ARGS__);                               \
+                     .data() __VA_OPT__(, ) __VA_ARGS__);                      \
   } while (false)
 
 #ifdef NDEBUG
@@ -452,12 +459,14 @@ struct Logger {
 #else
 #define TRACE(_fmt, ...)                                                       \
   do {                                                                         \
-    logger.Trace(                                                              \
-        logger::zstrcats(logger::zatoa("[" __FILE__ ":" QUOTE(__LINE__) ":"),  \
-                         logger::zatoa(logger::PastLastSlash<__FILE__>::kArr), \
-                         logger::zatoa("]: [TT] "), logger::zatoa(_fmt))       \
+    logger.Trace(logutil::zstrcats(                                            \
+                     logutil::zatoa("["),                                      \
+                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
+                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
+                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [TT] "), \
+                     logutil::zatoa(_fmt))                                     \
                                                                                \
-            .data() __VA_OPT__(, ) __VA_ARGS__);                               \
+                     .data() __VA_OPT__(, ) __VA_ARGS__);                      \
   } while (false)
 
 #endif
