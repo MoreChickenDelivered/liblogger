@@ -81,6 +81,8 @@ if(LIBLOGGER_COMPILE_EXAMPLE)
 	set_target_properties(liblogger-example PROPERTIES OUTPUT_NAME logutil_example)
 	add_library(example_dylib SHARED logutil/logutil_example_dylib.cc)
 	target_link_libraries(example_dylib PRIVATE liblogger  -lrt)
+	target_compile_definitions(liblogger-example PRIVATE OVERRIDE_NDEBUG)
+	target_compile_definitions(example_dylib PRIVATE OVERRIDE_NDEBUG)
 endif()
 
 #option(LIBLOGGER_INSTALL "Install liblogger" ON)

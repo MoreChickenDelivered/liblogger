@@ -10,24 +10,36 @@
 #include <chalk/chalk.h>
 #include <date/date.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <boost/lockfree/policies.hpp>
+#include <boost/lockfree/spsc_queue.hpp>
+#include <cfloat>
 #include <chrono>
+#include <cpptrace/cpptrace.hpp>
 #include <cstring>
+#include <exception>
 #include <format>
 #include <functional>
 #include <iostream>
+#include <memory>
+#include <ranges>
+#include <source_location>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
 #if (__cplusplus >= 202002L)
 template <ssize_t N>
-consteval auto _basename(const char (&path)[N]) {
+constexpr auto _basename(const char (&path)[N]) {
   ssize_t idx;
   for (idx = N - 1; idx >= 0; --idx)
     if (path[idx] == '/') break;
@@ -41,6 +53,8 @@ inline const char *_basename(const char *path) {
 }
 #endif
 
+struct Logger;
+
 namespace logutil {
 namespace details {
 
@@ -49,6 +63,21 @@ static inline auto fmt_args(auto &&fmt_str, Args &&...args) {
   return (std::vformat(std::forward<decltype(fmt_str)>(fmt_str),
                        std::make_format_args(std::forward<Args>(args)...)));
 }
+
+static constexpr auto kGetEnv = [](const char *env_var_name) {
+  if (auto *env_var = getenv(env_var_name); env_var != nullptr) {
+    auto sv_env = std::string_view{env_var};
+    if (sv_env == "0" || sv_env == "n" || sv_env == "N") return false;
+    if (auto itr =
+            std::ranges::count(std::vector({"0", "n", "N", "no", "NO", "false",
+                                            "FALSE", "off", "OFF"}),
+                               sv_env);
+        itr)
+      return false;
+    return true;
+  }
+  return false;
+};
 
 namespace explode {
 template <uint8_t... Digits>
@@ -110,6 +139,25 @@ struct PastLastSlash {
 
   std::array<char, N - 1> value{};
 };
+
+template <ssize_t N>
+consteval std::string basename(const char (&path)[N]) {
+  ssize_t idx;
+  for (idx = N - 1; idx >= 0; --idx)
+    if (path[idx] == '/') break;
+  return (path + idx + 1);
+}
+
+template <typename... Args>
+static inline void crash_with_info(std::source_location sloc,
+                                   std::format_string<Args...> fmt_str,
+                                   Args &&...args) {
+  throw std::runtime_error{
+      std::format("\n{}:{}:{}: {}", ::basename(sloc.file_name()), sloc.line(),
+                  sloc.function_name(),
+                  chalk::fg::ANSI8<255, 0, 0>(
+                      std::format(fmt_str, std::forward<Args>(args)...)))};
+}
 }  // namespace details
 
 template <details::PastLastSlash S>
@@ -121,14 +169,6 @@ struct PastLastSlash {
   }
   static constexpr std::array<char, S.len() + 1> kArr{copy()};
 };
-
-template <ssize_t N>
-consteval std::string basename(const char (&path)[N]) {
-  ssize_t idx;
-  for (idx = N - 1; idx >= 0; --idx)
-    if (path[idx] == '/') break;
-  return (path + idx + 1);
-}
 
 template <std::size_t... Zs>
 constexpr std::string zstrcats(const std::array<char, Zs> &...strN)
@@ -192,24 +232,30 @@ static inline auto isoDate(std::chrono::time_point<Clock> tpt = Clock::now())
                       std::chrono::floor<std::chrono::milliseconds>(tpt));
 }
 
+static Logger &get() noexcept;
+
 }  // namespace logutil
 
 struct Logger {
   explicit Logger(std::ostream &ost = std::cout, std::ostream &est = std::cerr)
       : outStream_{&ost}, errStream_{&est} {}
 
+  ~Logger() { flush(); }
+
+  inline static void flush() {
+    if (Logger::async_output_queue_) {
+      std::pair<std::ostream *, std::string> output_elm;
+      while (Logger::async_output_queue_->pop(output_elm)) {
+        (*output_elm.first) << output_elm.second;
+      }
+    }
+  }
+
   template <typename... Args>
   inline auto Info(Args &&...args) {
     if (verbosity_ >= Verbosity::kInfo)
       output(std::chrono::system_clock::now(), outStream_, kInfoChalk,
              std::forward<Args>(args)...);
-  }
-
-  template <const char *FmtStr, typename... Args>
-  inline auto InfoConstFmt(Args &&...args) {
-    if (verbosity_ >= Verbosity::kInfo)
-      output<FmtStr>(std::chrono::system_clock::now(), outStream_, kInfoChalk,
-                     std::forward<Args>(args)...);
   }
 
   template <typename... Args>
@@ -233,7 +279,7 @@ struct Logger {
              std::forward<Args>(args)...);
   }
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) | defined(OVERRIDE_NDEBUG)
   template <typename... Args>
   inline auto Trace(Args &&...args) {
     if (verbosity_ >= Verbosity::kTrace)
@@ -268,17 +314,24 @@ struct Logger {
 
     lastTimes_[(ost == outStream_ && !this->unified_output_) ? 0 : 1] = tpt;
 
-    *ost << (kTsChalk(logutil::isoDate(tpt)) + "  " +
-             fmt(logutil::details::fmt_args(
-                 std::forward<decltype(fmt_str)>(fmt_str),
-                 std::forward<Args>(args)...)) +
-             " +" + kDtChalk(std::to_string(delta_t.count()) + "s") + "\n");
+    async_output_queue_->push(std::make_pair(
+        ost, (kTsChalk(logutil::isoDate(tpt)) + "  " +
+              fmt(logutil::details::fmt_args(
+                  std::forward<decltype(fmt_str)>(fmt_str),
+                  std::forward<Args>(args)...)) +
+              " +" + kDtChalk(std::to_string(delta_t.count()) + "s") + "\n")));
   }
 
  private:
   std::ostream *outStream_, *errStream_;
   std::chrono::time_point<std::chrono::system_clock> lastTimes_[2]{
       std::chrono::system_clock::now(), std::chrono::system_clock::now()};
+
+  static constexpr auto kAsyncOutputQueueCapacity = 1024;
+  static inline boost::lockfree::spsc_queue<
+      std::pair<std::ostream *, std::string>,
+      boost::lockfree::capacity<kAsyncOutputQueueCapacity>>
+      *async_output_queue_ = nullptr;
 
   bool unified_output_ = false;
   Verbosity verbosity_ = Verbosity::kDebug;
@@ -292,7 +345,9 @@ struct Logger {
   static constexpr auto kWarnChalk = chalk::fg::Yellow;
   static constexpr auto kDebugChalk = chalk::fg::Magenta;
   static constexpr auto kTraceChalk =
-      chalk::compose(chalk::fmt::Italic, chalk::fg::Blue);
+      chalk::compose(chalk::compose(chalk::BackgroundColor{chalk::bg::White},
+                                    chalk::fg::ANSI8<45, 0, 255>),
+                     chalk::fmt::Bold);
 
  public:
   /**
@@ -320,74 +375,8 @@ struct Logger {
    * @return A reference to the Logger singleton.
    * @throws std::runtime_error if an error occurs during the process.
    */
-  static auto get() noexcept -> Logger & {
-    try {
-      static auto singleton = []() {
-        auto my_pid = getpid();
-        constexpr auto kSzLogger = sizeof(std::shared_ptr<Logger>);
-
-        if (const int shm_fd =
-                shm_open(std::format("/{}-logger", my_pid).c_str(), O_RDWR,
-                         S_IRUSR | S_IWUSR);
-            shm_fd != -1) {
-          auto *mmapped_shm = static_cast<std::shared_ptr<Logger> *>(
-              mmap(nullptr, kSzLogger, PROT_READ | PROT_WRITE, MAP_SHARED,
-                   shm_fd, 0));
-
-          if (mmapped_shm == MAP_FAILED)
-            throw std::runtime_error{std::format(
-                "{}:{}:{}: on-restore mmap of shm area failed: {}", __FILE__,
-                __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
-
-          close(shm_fd);
-          auto prev_logger = *mmapped_shm;
-
-          munmap(mmapped_shm, kSzLogger);
-          return prev_logger;
-        }
-
-        if (const int shm_fd =
-                shm_open(std::format("/{}-logger", my_pid).c_str(),
-                         O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
-            shm_fd != -1) {
-          if (ftruncate(shm_fd, kSzLogger) == -1) {
-            throw std::runtime_error{
-                std::format("{}:{}:{}: ftruncate failed: {}", __FILE__,
-                            __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
-          }
-          auto new_logger = std::make_shared<Logger>();
-
-          auto *mmapped_shm = static_cast<std::shared_ptr<Logger> *>(
-              mmap(nullptr, kSzLogger, PROT_READ | PROT_WRITE, MAP_SHARED,
-                   shm_fd, 0));
-
-          if (mmapped_shm == MAP_FAILED)
-            throw std::runtime_error{std::format(
-                "{}:{}:{}: on-create mmap of shm area failed: {}", __FILE__,
-                __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
-
-          *mmapped_shm = new_logger;
-
-          close(shm_fd);
-          munmap(mmapped_shm, kSzLogger);
-
-          return new_logger;
-        }
-
-        throw std::runtime_error{
-            std::format("{}:{}:{}: unable to restore or create a new 'shm' "
-                        "handle for Logger",
-                        __FILE__, __LINE__, __PRETTY_FUNCTION__)};
-      }();
-      return *singleton;
-    } catch (std::exception const &err) {
-      std::cerr << std::format(
-          "{}:{}:{}: caught exception while constructing Logger singleton: "
-          "{}\n",
-          __FILE__, __LINE__, __func__, err.what());
-      std::terminate();
-    }
-  }
+  static Logger &get() noexcept { return logutil::get(); }
+  friend Logger &logutil::get() noexcept;
 };
 
 // #define CONCAT(_a_, _b_) CONCAT_INNER(_a_, _b_)
@@ -405,70 +394,283 @@ struct Logger {
 //            requires { std::type_identity_t<T[sizeof(x) + 1]>{x}; }; \
 //   }())
 
-#define INFO(_fmt, ...)                                                       \
-  do {                                                                        \
-    logger.Info(logutil::zstrcats(                                            \
-                    logutil::zatoa("["),                                      \
-                    logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
-                    logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
-                    logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [II] "), \
-                    logutil::zatoa(_fmt))                                     \
-                                                                              \
-                    .data() __VA_OPT__(, ) __VA_ARGS__);                      \
+#define INFO(_fmt, ...)                                                     \
+  do {                                                                      \
+    logger.Info(logutil::zstrcats(                                          \
+                    logutil::zatoa("[II] ["),                               \
+                    logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr), \
+                    logutil::zatoa(":" QUOTE(__LINE__) ":"),                \
+                    logutil::zatoa(__FUNCTION__), logutil::zatoa("]: "),    \
+                    logutil::zatoa(_fmt))                                   \
+                                                                            \
+                    .data() __VA_OPT__(, ) __VA_ARGS__);                    \
   } while (false)
 
-#define ERROR(_fmt, ...)                                                       \
-  do {                                                                         \
-    logger.Error(logutil::zstrcats(                                            \
-                     logutil::zatoa("["),                                      \
-                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
-                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
-                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [EE] "), \
-                     logutil::zatoa(_fmt))                                     \
-                                                                               \
-                     .data() __VA_OPT__(, ) __VA_ARGS__);                      \
+#define ERROR(_fmt, ...)                                                     \
+  do {                                                                       \
+    logger.Error(logutil::zstrcats(                                          \
+                     logutil::zatoa("[EE] ["),                               \
+                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr), \
+                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                \
+                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: "),    \
+                     logutil::zatoa(_fmt))                                   \
+                                                                             \
+                     .data() __VA_OPT__(, ) __VA_ARGS__);                    \
   } while (false)
 
-#define WARN(_fmt, ...)                                                       \
-  do {                                                                        \
-    logger.Warn(logutil::zstrcats(                                            \
-                    logutil::zatoa("["),                                      \
-                    logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
-                    logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
-                    logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [WW] "), \
-                    logutil::zatoa(_fmt))                                     \
-                                                                              \
-                    .data() __VA_OPT__(, ) __VA_ARGS__);                      \
+#define WARN(_fmt, ...)                                                     \
+  do {                                                                      \
+    logger.Warn(logutil::zstrcats(                                          \
+                    logutil::zatoa("[WW] ["),                               \
+                    logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr), \
+                    logutil::zatoa(":" QUOTE(__LINE__) ":"),                \
+                    logutil::zatoa(__FUNCTION__), logutil::zatoa("]: "),    \
+                    logutil::zatoa(_fmt))                                   \
+                                                                            \
+                    .data() __VA_OPT__(, ) __VA_ARGS__);                    \
   } while (false)
 
-#define DEBUG(_fmt, ...)                                                       \
-  do {                                                                         \
-    logger.Debug(logutil::zstrcats(                                            \
-                     logutil::zatoa("["),                                      \
-                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
-                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
-                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [DD] "), \
-                     logutil::zatoa(_fmt))                                     \
-                                                                               \
-                     .data() __VA_OPT__(, ) __VA_ARGS__);                      \
+#define DEBUG(_fmt, ...)                                                     \
+  do {                                                                       \
+    logger.Debug(logutil::zstrcats(                                          \
+                     logutil::zatoa("[DD] ["),                               \
+                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr), \
+                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                \
+                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: "),    \
+                     logutil::zatoa(_fmt))                                   \
+                                                                             \
+                     .data() __VA_OPT__(, ) __VA_ARGS__);                    \
   } while (false)
 
-#ifdef NDEBUG
+#if defined(NDEBUG) && !defined(OVERRIDE_NDEBUG)
 #define TRACE(...) \
   { ; }
 #else
-#define TRACE(_fmt, ...)                                                       \
-  do {                                                                         \
-    logger.Trace(logutil::zstrcats(                                            \
-                     logutil::zatoa("["),                                      \
-                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr),   \
-                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                  \
-                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: [TT] "), \
-                     logutil::zatoa(_fmt))                                     \
-                                                                               \
-                     .data() __VA_OPT__(, ) __VA_ARGS__);                      \
+#define TRACE(_fmt, ...)                                                     \
+  do {                                                                       \
+    logger.Trace(logutil::zstrcats(                                          \
+                     logutil::zatoa("[TT] ["),                               \
+                     logutil::zatoa(logutil::PastLastSlash<__FILE__>::kArr), \
+                     logutil::zatoa(":" QUOTE(__LINE__) ":"),                \
+                     logutil::zatoa(__FUNCTION__), logutil::zatoa("]: "),    \
+                     logutil::zatoa(_fmt))                                   \
+                                                                             \
+                     .data() __VA_OPT__(, ) __VA_ARGS__);                    \
   } while (false)
 
 #endif
+
+#endif
+#ifndef RELEASE_ASSERT
+#define RELEASE_ASSERT(assertion, _fmt, ...)                             \
+  do {                                                                   \
+    if (BOOST_UNLIKELY(!(assertion)))                                    \
+      ([](std::source_location sloc = std::source_location::current()) { \
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);                         \
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);                         \
+        logutil::details::crash_with_info(                               \
+            sloc,                                                        \
+            "\nRuntime assertion failed:"                                \
+            "\n\tLocation: " __FILE__                                    \
+            ":" QUOTE(__LINE__) "\n\tFailed assertion: " #assertion      \
+                                "\n\tContext: " _fmt __VA_OPT__(, )      \
+                                    __VA_ARGS__);                        \
+      }());                                                              \
+  } while (false);
+
+namespace logutil {
+auto static get() noexcept -> Logger & {
+  using ::basename;
+
+  try {
+    static auto singleton = []() {
+      const auto do_debug = logutil::details::kGetEnv("LOGUTIL_DEBUG");
+      const auto is_realtime = logutil::details::kGetEnv("LOGUTIL_REALTIME");
+
+      auto my_pid = getpid();
+      constexpr auto kOffLogger = 0UL;
+      constexpr auto kSzLogger = sizeof(std::shared_ptr<Logger>);
+      constexpr auto kOffQueue = kOffLogger + kSzLogger;
+      constexpr auto kSzQueue = sizeof(decltype(Logger::async_output_queue_));
+      constexpr auto kSzCombined = kSzLogger + kSzQueue;
+
+      if (const int shm_fd = shm_open(std::format("/{}-logger", my_pid).c_str(),
+                                      O_RDWR, S_IRUSR | S_IWUSR);
+          shm_fd != -1) {
+        auto mmapped_shm = reinterpret_cast<uintptr_t>(
+            mmap(nullptr, kSzCombined, PROT_READ | PROT_WRITE, MAP_SHARED,
+                 shm_fd, 0));
+
+        if (mmapped_shm == reinterpret_cast<uintptr_t>(MAP_FAILED))
+          throw std::runtime_error{
+              std::format("{}:{}:{}: on-restore mmap of shm area failed: {}",
+                          basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                          strerror(errno))};
+
+        close(shm_fd);
+
+        auto prev_logger = *reinterpret_cast<std::shared_ptr<Logger> *>(
+            mmapped_shm + kOffLogger);
+
+        auto *prev_queue =
+            *reinterpret_cast<decltype(Logger::async_output_queue_) *>(
+                mmapped_shm + kOffQueue);
+
+        if (!prev_logger || !prev_queue)
+          throw std::runtime_error{std::format(
+              "{}:{}:{}: on-restore: NULL in the mmapped values (raw "
+              "pointers: {:p},{:p})",
+              basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+              (void *)prev_logger.get(), (void *)prev_queue)};
+
+        Logger::async_output_queue_ = prev_queue;
+
+        if (do_debug) {
+          dprintf(STDERR_FILENO,
+                  "%s:%i:%s: restored logger instance form mmapped shared "
+                  "memory at (%p,%p)\n",
+                  basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                  (void *)prev_logger.get(), (void *)prev_queue);
+        }
+
+        munmap(reinterpret_cast<void *>(mmapped_shm), kSzCombined);
+        return prev_logger;
+      }
+
+      if (const int shm_fd =
+              shm_open(std::format("/{}-logger", my_pid).c_str(),
+                       O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
+          shm_fd != -1) {
+        if (ftruncate(shm_fd, kSzCombined) == -1) {
+          throw std::runtime_error{
+              std::format("{}:{}:{}: ftruncate failed: {}", basename(__FILE__),
+                          __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
+        }
+        auto new_logger = std::make_shared<Logger>();
+        auto *new_queue =
+            new (std::pointer_traits<
+                 decltype(Logger::async_output_queue_)>::element_type)();
+
+        auto *mmapped_shm = static_cast<void *>(mmap(nullptr, kSzCombined,
+                                                     PROT_READ | PROT_WRITE,
+                                                     MAP_SHARED, shm_fd, 0));
+
+        if (mmapped_shm == MAP_FAILED)
+          throw std::runtime_error{
+              std::format("{}:{}:{}: on-create mmap of shm area failed: {}",
+                          basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                          strerror(errno))};
+
+        *reinterpret_cast<std::shared_ptr<Logger> *>(
+            static_cast<char *>(mmapped_shm) + kOffLogger) = new_logger;
+
+        *reinterpret_cast<decltype(Logger::async_output_queue_) *>(
+            static_cast<char *>(mmapped_shm) + kOffQueue) = new_queue;
+
+        close(shm_fd);
+        munmap(mmapped_shm, kSzCombined);
+
+        std::thread{[=]() {
+          if (!is_realtime) {
+            const auto my_pthread = pthread_self();
+
+            const auto my_scheduler = sched_getscheduler(getpid());
+            RELEASE_ASSERT(my_scheduler != -1, "sched_getscheduler failed: {}",
+                           strerror(errno));
+
+            const auto min_priority = sched_get_priority_min(my_scheduler);
+            RELEASE_ASSERT(min_priority != -1,
+                           "sched_get_priority_min failed: {}",
+                           strerror(errno));
+
+            pthread_setschedprio(pthread_self(), min_priority);
+          }
+
+          if (do_debug)
+            dprintf(STDERR_FILENO,
+                    "%s:%i:%s: spawned logger output async queue thread... "
+                    "(q-size=%zu, "
+                    "realtime=%i)\n",
+                    basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                    sizeof(*Logger::async_output_queue_),
+                    static_cast<int>(is_realtime));
+
+          if (Logger::async_output_queue_ == nullptr) {
+            if (do_debug)
+              dprintf(STDERR_FILENO,
+                      "%s:%i:%s: awaiting asychronous IPC state...\n",
+                      basename(__FILE__), __LINE__, __PRETTY_FUNCTION__);
+            while (!Logger::async_output_queue_);
+            if (do_debug)
+              dprintf(STDERR_FILENO, "%s:%i:%s: asychronous IPC state: set\n",
+                      basename(__FILE__), __LINE__, __PRETTY_FUNCTION__);
+          }
+
+          auto constexpr kInitBackoff = 1.0e3F;
+          auto constexpr kBackoffGrowth = 1.1F;
+          auto constexpr kBackoffIterLimit = 1e7F;
+          constexpr auto kSleepDurationMillis = 100;
+
+          std::pair<std::ostream *, std::string> output_elm;
+
+          do {
+            if (Logger::async_output_queue_->read_available()) {
+              Logger::flush();
+            } else {
+              if (is_realtime) {
+                size_t iters{};
+                float backoff = kInitBackoff;
+                while (!Logger::async_output_queue_->read_available()) {
+                  if (iters >= static_cast<size_t>(kBackoffIterLimit)) {
+                    std::this_thread::sleep_for(
+                        std::chrono::duration<float, std::milli>{
+                            sqrtf(kSleepDurationMillis)});
+                    break;
+                  }
+                  if (iters++ > static_cast<size_t>(backoff)) {
+                    backoff = powf(backoff, kBackoffGrowth);
+                    std::this_thread::yield();
+                  }
+                }
+              } else {
+                while (!Logger::async_output_queue_->read_available()) {
+                  std::this_thread::sleep_for(
+                      std::chrono::milliseconds(kSleepDurationMillis));
+                }
+              }
+            }
+          } while (true);
+        }}.detach();
+
+        atexit([] {
+          auto &logger = Logger::get();
+          logger.~Logger();
+        });
+
+        if (do_debug) {
+          dprintf(STDERR_FILENO, "%s:%i:%s: logger initialized (%p,%p)\n",
+                  basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                  new_logger.get(), new_queue);
+        }
+
+        Logger::async_output_queue_ = new_queue;
+        return new_logger;
+      }
+
+      throw std::runtime_error{
+          std::format("{}:{}:{}: unable to restore or create a new 'shm' "
+                      "handle for Logger",
+                      basename(__FILE__), __LINE__, __PRETTY_FUNCTION__)};
+    }();
+    return *singleton;
+  } catch (std::exception const &err) {
+    std::cerr << std::format(
+        "{}:{}:{}: caught exception while constructing Logger singleton: "
+        "{}\n",
+        basename(__FILE__), __LINE__, __func__, err.what());
+    std::terminate();
+  }
+}
+}  // namespace logutil
 
 #endif  // TH2_LOGUTIL_H

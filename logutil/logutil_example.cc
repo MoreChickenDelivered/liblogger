@@ -4,60 +4,53 @@
 //
 
 #include <dlfcn.h>
+#include <sys/wait.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cpptrace/cpptrace.hpp>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <random>
 #include <ranges>
 
 #include "logutil.h"
 
-int main(int argc, char *argv[]) {
-  std::srand(std::time(nullptr));
+int main(int /*argc*/, char * /*argv*/[]) {
+  cpptrace::register_terminate_handler();
+
   static auto &logger = Logger::get();  // default logger
 
-  std::cout << __FILE__ "\n";
-
-  static auto hd_logfile =
+  static auto logfile_ofs =
       std::ofstream{std::to_string(std::time(nullptr)) + ".txt"};
-  static auto hd_logger = Logger{hd_logfile, hd_logfile};
-  hd_logger.setVerbosity(Logger::Verbosity::kTrace);
 
-  struct RandInts {
-    RandInts() = default;
-    explicit RandInts(ssize_t n) : n_{n} {}
-    bool operator==(RandInts const &rhs) const { return rhs.n_ == n_; }
-    bool operator!=(RandInts const &rhs) const { return !(*this == rhs); }
-    RandInts &operator++() {
-      --n_;
-      return *this;
-    }
-    int operator*() const { return std::rand() * ((std::rand() % 2) ? -1 : 1); }
+  auto flogger = Logger{logfile_ofs, logfile_ofs};
 
-   private:
-    ssize_t n_{};
-  };
+  flogger.setVerbosity(Logger::Verbosity::kTrace);
+  flogger.setUnifiedOutput(true);
 
   (void)std::ranges::for_each(
-      std::views::iota(0, 1) | std::views::transform([](auto) {
-        return std::rand() * ((std::rand() % 2) ? -1 : 1);
-      }),
-      [](int cur_int) {
+      std::views::iota(0) | std::views::take(2) |
+          std::views::transform([](auto) {
+            static std::random_device rdev{};
+            static std::default_random_engine rng{rdev()};
+            static std::uniform_int_distribution<> dist{-1000, 1000};
+            return dist(rng);
+          }),
+      [&](int cur_int) {
         // raw lines, console.debug alike, does not support
         // std::format syntax
-        hd_logger.Trace("random integer: {}", cur_int);
+        flogger.Info("random integer: {}", cur_int);
 
         // using std::format
         auto pdd = std::chrono::high_resolution_clock::now();
-        dprintf(1, "%zu\n", pdd.time_since_epoch().count());
-        hd_logger.Trace(std::format("hig-res timestamp: {}ns",
-                                    std::chrono::high_resolution_clock::now()
-                                        .time_since_epoch()
-                                        .count()));
+        flogger.Trace(std::format("hig-res timestamp: {}ns",
+                                  std::chrono::high_resolution_clock::now()
+                                      .time_since_epoch()
+                                      .count()));
 
         DEBUG("random int: {}", cur_int);
         INFO("random int squared: {}", cur_int * cur_int);
@@ -88,4 +81,16 @@ int main(int argc, char *argv[]) {
   libmain_fn();
 
   dlclose(dlhandle);
+
+  // tests RELEASE_ASSERT
+  Logger::flush();
+  if (auto is_ppid = fork(); !is_ppid) {
+    RELEASE_ASSERT(
+        !"unsuccessul-run",
+        "\n\n\tTHIS IS NOT A REAL FAILURE.\n\tIT TRIGGERS A CONTROLLED "
+        "ABORT FROM A SPAWNED CHILD PROCESS.\n");
+  } else {
+    waitpid(is_ppid, nullptr, 0);
+    INFO("OK");
+  }
 }
