@@ -164,6 +164,16 @@ static inline void crash_with_info(std::source_location sloc,
                   chalk::fg::ANSI8<255, 0, 0>(
                       std::format(fmt_str, std::forward<Args>(args)...)))};
 }
+
+static inline auto tabstops(std::string str, off_t ntabs) {
+  auto ptr = str.begin();
+  while (ptr != str.end()) {
+    ptr = (ptr == str.begin() || *(ptr - 1) == '\n')
+              ? str.insert(ptr, ntabs, '\t') + ntabs
+              : ptr + 1;
+  }
+  return str;
+}
 }  // namespace details
 
 template <details::PastLastSlash S>
@@ -468,20 +478,21 @@ struct Logger {
 
 #endif
 #ifndef RELEASE_ASSERT
-#define RELEASE_ASSERT(assertion, _fmt, ...)                             \
-  do {                                                                   \
-    if (BOOST_UNLIKELY(!(assertion)))                                    \
-      ([](std::source_location sloc = std::source_location::current()) { \
-        __atomic_thread_fence(__ATOMIC_SEQ_CST);                         \
-        __atomic_signal_fence(__ATOMIC_SEQ_CST);                         \
-        logutil::details::crash_with_info(                               \
-            sloc,                                                        \
-            "\nRuntime assertion failed:"                                \
-            "\n\tLocation: " __FILE__                                    \
-            ":" QUOTE(__LINE__) "\n\tFailed assertion: " #assertion      \
-                                "\n\tContext: " _fmt __VA_OPT__(, )      \
-                                    __VA_ARGS__);                        \
-      }());                                                              \
+#define RELEASE_ASSERT(assertion, _fmt, ...)                              \
+  do {                                                                    \
+    if (BOOST_UNLIKELY(!(assertion)))                                     \
+      ([&](std::source_location sloc = std::source_location::current()) { \
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);                          \
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);                          \
+        logutil::details::crash_with_info(                                \
+            sloc,                                                         \
+            "\nRuntime assertion failed:"                                 \
+            "\n\tLocation: " __FILE__                                     \
+            ":" QUOTE(__LINE__) "\n\tFailed assertion: " #assertion       \
+                                "\n\tContext:\n{}",                       \
+            logutil::details::tabstops(                                   \
+                std::format(_fmt __VA_OPT__(, ) __VA_ARGS__), 2));        \
+      }());                                                               \
   } while (false);
 
 namespace logutil {
@@ -589,7 +600,9 @@ auto static get() noexcept -> Logger & {
                            "sched_get_priority_min failed: {}",
                            strerror(errno));
 
-            pthread_setschedprio(pthread_self(), min_priority);
+            RELEASE_ASSERT(
+                pthread_setschedprio(pthread_self(), min_priority) == 0, "{}",
+                strerror(errno));
           }
 
           if (do_debug)
