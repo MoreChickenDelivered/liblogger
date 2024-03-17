@@ -31,7 +31,10 @@ if (NOT TARGET date::date)
 endif()
 
 if(DEFINED ENV{VCPKG_ROOT})
-	execute_process(COMMAND "$ENV{VCPKG_ROOT}/vcpkg" install boost-iostreams boost-iostreams[lzma] liblzma bzip2 zstd cpptrace)
+	execute_process(COMMAND "$ENV{VCPKG_ROOT}/vcpkg" install --recurse
+		boost-iostreams boost-iostreams[lzma]
+		boost-lockfree
+		liblzma bzip2 zstd cpptrace)
 endif()
 
 message(STATUS "[liblogger] Using system C++20 std::format")
