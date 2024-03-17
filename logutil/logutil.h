@@ -61,7 +61,13 @@ namespace details {
 template <typename... Args>
 static inline auto fmt_args(auto &&fmt_str, Args &&...args) {
   return (std::vformat(std::forward<decltype(fmt_str)>(fmt_str),
-                       std::make_format_args(std::forward<Args>(args)...)));
+                       std::make_format_args(std::forward<Args &>(args)...)));
+}
+
+template <typename... Args>
+static inline auto fmt_args(const auto &fmt_str, Args &...args) {
+  return (std::vformat(std::forward<decltype(fmt_str)>(fmt_str),
+                       std::make_format_args(std::forward<Args &>(args)...)));
 }
 
 static constexpr auto kGetEnv = [](const char *env_var_name) {
