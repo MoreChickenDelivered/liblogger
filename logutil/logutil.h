@@ -391,7 +391,7 @@ struct Logger {
    * @return A reference to the Logger singleton.
    * @throws std::runtime_error if an error occurs during the process.
    */
-  static Logger &get() noexcept { return logutil::get(); }
+  static inline auto &get() noexcept { return logutil::get(); }
   friend Logger &logutil::get() noexcept;
 };
 
@@ -500,7 +500,7 @@ auto static get() noexcept -> Logger & {
   using ::basename;
 
   try {
-    static auto singleton = []() {
+    static const auto kSingleton = []() {
       const auto do_debug = logutil::details::kGetEnv("LOGUTIL_DEBUG");
       const auto is_realtime = logutil::details::kGetEnv("LOGUTIL_REALTIME");
 
@@ -538,7 +538,8 @@ auto static get() noexcept -> Logger & {
               "{}:{}:{}: on-restore: NULL in the mmapped values (raw "
               "pointers: {:p},{:p})",
               basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
-              (void *)prev_logger.get(), (void *)prev_queue)};
+              static_pointer_cast<void>(prev_logger).get(),
+              static_cast<void *>(prev_queue))};
 
         Logger::async_output_queue_ = prev_queue;
 
@@ -547,7 +548,8 @@ auto static get() noexcept -> Logger & {
                   "%s:%i:%s: restored logger instance form mmapped shared "
                   "memory at (%p,%p)\n",
                   basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
-                  (void *)prev_logger.get(), (void *)prev_queue);
+                  static_pointer_cast<void>(prev_logger).get(),
+                  static_cast<void *>(prev_queue));
         }
 
         munmap(reinterpret_cast<void *>(mmapped_shm), kSzCombined);
@@ -681,7 +683,7 @@ auto static get() noexcept -> Logger & {
                       "handle for Logger",
                       basename(__FILE__), __LINE__, __PRETTY_FUNCTION__)};
     }();
-    return *singleton;
+    return *kSingleton;
   } catch (std::exception const &err) {
     std::cerr << std::format(
         "{}:{}:{}: caught exception while constructing Logger singleton: "
