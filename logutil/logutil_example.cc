@@ -4,6 +4,8 @@
 //
 
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 
 #include <algorithm>
@@ -24,10 +26,16 @@ int main(int /*argc*/, char * /*argv*/[]) {
 
   static auto &logger = Logger::get();  // default logger
 
-  static auto logfile_ofs =
-      std::ofstream{std::to_string(std::time(nullptr)) + ".txt"};
-
-  auto flogger = Logger{logfile_ofs, logfile_ofs};
+  static auto flogger = [] {
+    auto const ofs_path = (std::filesystem::temp_directory_path() /
+                           std::to_string(std::time(nullptr)))
+                              .replace_extension(".txt");
+    auto ofs_fd = open(ofs_path.c_str(), O_CREAT | O_WRONLY | O_TRUNC,
+                       S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    RELEASE_ASSERT(ofs_fd != -1, "create hd-sinked logger failed: {}",
+                   strerror(errno));
+    return Logger{ofs_fd, ofs_fd};
+  }();
 
   flogger.setVerbosity(Logger::Verbosity::kTrace);
   flogger.setUnifiedOutput(true);

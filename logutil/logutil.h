@@ -7,12 +7,15 @@
 #ifndef TH2_LOGUTIL_H
 #define TH2_LOGUTIL_H
 
+#include <bits/types/sigset_t.h>
 #include <chalk/chalk.h>
 #include <date/date.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/epoll.h>
 #include <sys/mman.h>
+#include <sys/signalfd.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -22,11 +25,14 @@
 #include <cfloat>
 #include <chrono>
 #include <cpptrace/cpptrace.hpp>
+#include <csignal>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <format>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <source_location>
@@ -161,7 +167,7 @@ static inline void crash_with_info(std::source_location sloc,
   throw std::runtime_error{
       std::format("\n{}:{}:{}: {}", ::basename(sloc.file_name()), sloc.line(),
                   sloc.function_name(),
-                  chalk::fg::ANSI8<255, 0, 0>(
+                  chalk::fg::ANSI8<std::numeric_limits<uint8_t>::max(), 0, 0>(
                       std::format(fmt_str, std::forward<Args>(args)...)))};
 }
 
@@ -253,16 +259,19 @@ static Logger &get() noexcept;
 }  // namespace logutil
 
 struct Logger {
-  explicit Logger(std::ostream &ost = std::cout, std::ostream &est = std::cerr)
-      : outStream_{&ost}, errStream_{&est} {}
+  explicit Logger(int ost = STDOUT_FILENO, int est = STDERR_FILENO)
+      : outStream_{ost}, errStream_{est} {}
 
   ~Logger() { flush(); }
 
   inline static void flush() {
     if (Logger::async_output_queue_) {
-      std::pair<std::ostream *, std::string> output_elm;
+      std::tuple<int, std::function<std::string(std::string_view)>, std::string>
+          output_elm;
+
       while (Logger::async_output_queue_->pop(output_elm)) {
-        (*output_elm.first) << output_elm.second;
+        auto [ost, fmt, str] = std::move(output_elm);
+        dprintf(ost, "%s", fmt && isatty(ost) ? fmt(str).c_str() : str.c_str());
       }
     }
   }
@@ -322,30 +331,33 @@ struct Logger {
 
  protected:
   template <typename Clock, typename FmtType, typename... Args>
-  auto output(std::chrono::time_point<Clock> &&tpt, std::ostream *ost,
-              FmtType &&fmt, auto &&fmt_str, Args &&...args) {
+  auto output(std::chrono::time_point<Clock> &&tpt, int ost, FmtType &&fmt,
+              auto &&fmt_str, Args &&...args) {
     const std::chrono::duration<float> delta_t =
         tpt - ((ost == outStream_ && !this->unified_output_) ? lastTimes_[0]
                                                              : lastTimes_[1]);
 
     lastTimes_[(ost == outStream_ && !this->unified_output_) ? 0 : 1] = tpt;
 
-    async_output_queue_->push(std::make_pair(
-        ost, (kTsChalk(logutil::isoDate(tpt)) + "  " +
-              fmt(logutil::details::fmt_args(
-                  std::forward<decltype(fmt_str)>(fmt_str),
-                  std::forward<Args>(args)...)) +
-              " +" + kDtChalk(std::to_string(delta_t.count()) + "s") + "\n")));
+    async_output_queue_->push(std::make_tuple(
+        ost, kTsChalk,
+        logutil::isoDate(tpt) + "  " +
+            fmt(logutil::details::fmt_args(
+                std::forward<decltype(fmt_str)>(fmt_str),
+                std::forward<Args>(args)...)) +
+            " +" + kDtChalk(std::to_string(delta_t.count()) + "s") + "\n"));
   }
 
  private:
-  std::ostream *outStream_, *errStream_;
+  int outStream_;
+  int errStream_;
   std::chrono::time_point<std::chrono::system_clock> lastTimes_[2]{
       std::chrono::system_clock::now(), std::chrono::system_clock::now()};
 
   static constexpr auto kAsyncOutputQueueCapacity = 1024;
   static inline boost::lockfree::spsc_queue<
-      std::pair<std::ostream *, std::string>,
+      std::tuple<int, std::function<std::string(std::string_view)>,
+                 std::string>,
       boost::lockfree::capacity<kAsyncOutputQueueCapacity>>
       *async_output_queue_ = nullptr;
 
@@ -627,14 +639,62 @@ auto static get() noexcept -> Logger & {
                       basename(__FILE__), __LINE__, __PRETTY_FUNCTION__);
           }
 
+          // setup abnormal termination intercept via signalfd
+          sigset_t mask;
+          sigemptyset(&mask);
+          sigaddset(&mask, SIGTERM);
+          sigaddset(&mask, SIGINT);
+          sigaddset(&mask, SIGQUIT);
+          sigaddset(&mask, SIGKILL);
+          sigaddset(&mask, SIGSEGV);
+          sigaddset(&mask, SIGABRT);
+          sigaddset(&mask, SIGBUS);
+          sigaddset(&mask, SIGFPE);
+          sigaddset(&mask, SIGILL);
+          sigaddset(&mask, SIGSYS);
+
+          if (sigprocmask(SIG_BLOCK, &mask, nullptr) == -1)
+            throw std::runtime_error{std::format(
+                "{}:{}:{}: sigprocmask failed: {}", basename(__FILE__),
+                __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
+
+          auto sigfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+
           auto constexpr kInitBackoff = 1.0e3F;
           auto constexpr kBackoffGrowth = 1.1F;
           auto constexpr kBackoffIterLimit = 1e7F;
           constexpr auto kSleepDurationMillis = 100;
 
-          std::pair<std::ostream *, std::string> output_elm;
+          auto constexpr kCheckSig = [&](int sigfd) {
+            signalfd_siginfo snfo;
+            ssize_t nread = read(sigfd, &snfo, sizeof(snfo));
+            if (nread == -1) {
+              if (errno == EAGAIN) return;
+              throw std::runtime_error{
+                  std::format("{}:{}:{}: read failed: {}", basename(__FILE__),
+                              __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
+            }
+            if (nread != sizeof(snfo))
+              throw std::runtime_error{std::format(
+                  "{}:{}:{}: read failed: short read", basename(__FILE__),
+                  __LINE__, __PRETTY_FUNCTION__)};
+            if (snfo.ssi_signo == SIGQUIT) {
+              Logger::async_output_queue_->push(std::make_tuple(
+                  STDERR_FILENO, Logger::kWarnChalk,
+                  "received SIGQUIT, triggering graceful exit...\n"));
+              Logger::flush();
+              // exit(EXIT_SUCCESS);
+            } else {
+              Logger::async_output_queue_->push(std::make_tuple(
+                  STDERR_FILENO, compose(Logger::kErrorChalk, chalk::fmt::Bold),
+                  "received signal, triggering graceful exit...\n"));
+              Logger::flush();
+              // exit(EXIT_FAILURE);
+            }
+          };
 
           do {
+            kCheckSig(sigfd);
             if (Logger::async_output_queue_->read_available()) {
               Logger::flush();
             } else {

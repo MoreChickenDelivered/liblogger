@@ -33,7 +33,7 @@ endif()
 if(DEFINED ENV{VCPKG_ROOT})
 	execute_process(COMMAND "$ENV{VCPKG_ROOT}/vcpkg" install --recurse
 		boost-iostreams boost-iostreams[lzma]
-		boost-lockfree curl
+		gtest boost-lockfree curl
 		liblzma bzip2 zstd cpptrace)
 endif()
 
