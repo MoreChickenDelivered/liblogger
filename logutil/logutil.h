@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <boost/lockfree/policies.hpp>
 #include <boost/lockfree/spsc_queue.hpp>
 #include <cfloat>
@@ -32,8 +33,10 @@
 #include <format>
 #include <functional>
 #include <iostream>
+#include <latch>
 #include <limits>
 #include <memory>
+#include <range/v3/algorithm/for_each.hpp>
 #include <ranges>
 #include <source_location>
 #include <span>
@@ -258,21 +261,64 @@ static Logger &get() noexcept;
 
 }  // namespace logutil
 
+// #define CONCAT(_a_, _b_) CONCAT_INNER(_a_, _b_)
+// #define CONCAT_INNER(_a_, _b_) _a_##_b_
+// #define UNIQUE_NAME(_base_) \
+//   CONCAT(CONCAT(CONCAT(_base_, __COUNTER__), _), __LINE__)
+
+#define QT(x) #x
+#define QUOTE(x) QT(x)
+
+// #include <type_traits>
+// #define IS_SL(x)                                                    \
+//   ([&]<class T = char>() {                                          \
+//     return std::is_same_v<decltype(x), T const(&)[sizeof(x)]> and   \
+//            requires { std::type_identity_t<T[sizeof(x) + 1]>{x}; }; \
+//   }())
+
+#ifndef RELEASE_ASSERT
+#define RELEASE_ASSERT(assertion, _fmt, ...)                              \
+  do {                                                                    \
+    if (BOOST_UNLIKELY(!(assertion)))                                     \
+      ([&](std::source_location sloc = std::source_location::current()) { \
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);                          \
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);                          \
+        logutil::details::crash_with_info(                                \
+            sloc,                                                         \
+            "\nRuntime assertion failed:"                                 \
+            "\n\tLocation: " __FILE__                                     \
+            ":" QUOTE(__LINE__) "\n\tFailed assertion: " #assertion       \
+                                "\n\tContext:\n{}",                       \
+            logutil::details::tabstops(                                   \
+                std::format(_fmt __VA_OPT__(, ) __VA_ARGS__), 2));        \
+      }());                                                               \
+  } while (false);
+#endif
+
 struct Logger {
   explicit Logger(int ost = STDOUT_FILENO, int est = STDERR_FILENO)
       : outStream_{ost}, errStream_{est} {}
 
-  ~Logger() { flush(); }
+  ~Logger() {
+    dprintf(STDERR_FILENO, "Logger instance destroyed\n");
+    flush();
+  }
 
   inline static void flush() {
     if (Logger::async_output_queue_) {
       std::tuple<int, std::function<std::string(std::string_view)>, std::string>
           output_elm;
 
+      static std::vector<int> to_sync;
+      to_sync.clear();
+
       while (Logger::async_output_queue_->pop(output_elm)) {
         auto [ost, fmt, str] = std::move(output_elm);
         dprintf(ost, "%s", fmt && isatty(ost) ? fmt(str).c_str() : str.c_str());
+        to_sync.push_back(ost);
       }
+
+      ranges::for_each(to_sync, fsync);
     }
   }
 
@@ -338,6 +384,9 @@ struct Logger {
                                                              : lastTimes_[1]);
 
     lastTimes_[(ost == outStream_ && !this->unified_output_) ? 0 : 1] = tpt;
+
+    RELEASE_ASSERT(async_output_queue_ != nullptr,
+                   "async_output_queue_ is nullptr");
 
     async_output_queue_->push(std::make_tuple(
         ost, kTsChalk,
@@ -407,21 +456,6 @@ struct Logger {
   friend Logger &logutil::get() noexcept;
 };
 
-// #define CONCAT(_a_, _b_) CONCAT_INNER(_a_, _b_)
-// #define CONCAT_INNER(_a_, _b_) _a_##_b_
-// #define UNIQUE_NAME(_base_) \
-//   CONCAT(CONCAT(CONCAT(_base_, __COUNTER__), _), __LINE__)
-
-#define QT(x) #x
-#define QUOTE(x) QT(x)
-
-// #include <type_traits>
-// #define IS_SL(x)                                                    \
-//   ([&]<class T = char>() {                                          \
-//     return std::is_same_v<decltype(x), T const(&)[sizeof(x)]> and   \
-//            requires { std::type_identity_t<T[sizeof(x) + 1]>{x}; }; \
-//   }())
-
 #define INFO(_fmt, ...)                                                     \
   do {                                                                      \
     logger.Info(logutil::zstrcats(                                          \
@@ -485,27 +519,7 @@ struct Logger {
                                                                              \
                      .data() __VA_OPT__(, ) __VA_ARGS__);                    \
   } while (false)
-
-#endif
-
-#endif
-#ifndef RELEASE_ASSERT
-#define RELEASE_ASSERT(assertion, _fmt, ...)                              \
-  do {                                                                    \
-    if (BOOST_UNLIKELY(!(assertion)))                                     \
-      ([&](std::source_location sloc = std::source_location::current()) { \
-        __atomic_thread_fence(__ATOMIC_SEQ_CST);                          \
-        __atomic_signal_fence(__ATOMIC_SEQ_CST);                          \
-        logutil::details::crash_with_info(                                \
-            sloc,                                                         \
-            "\nRuntime assertion failed:"                                 \
-            "\n\tLocation: " __FILE__                                     \
-            ":" QUOTE(__LINE__) "\n\tFailed assertion: " #assertion       \
-                                "\n\tContext:\n{}",                       \
-            logutil::details::tabstops(                                   \
-                std::format(_fmt __VA_OPT__(, ) __VA_ARGS__), 2));        \
-      }());                                                               \
-  } while (false);
+#endif  // NDEBUG && !OVERRIDE_NDEBUG
 
 namespace logutil {
 auto static get() noexcept -> Logger & {
@@ -515,6 +529,8 @@ auto static get() noexcept -> Logger & {
     static const auto kSingleton = []() {
       const auto do_debug = logutil::details::kGetEnv("LOGUTIL_DEBUG");
       const auto is_realtime = logutil::details::kGetEnv("LOGUTIL_REALTIME");
+
+      Logger::async_output_queue_ = nullptr;
 
       auto my_pid = getpid();
       constexpr auto kOffLogger = 0UL;
@@ -553,6 +569,15 @@ auto static get() noexcept -> Logger & {
               static_pointer_cast<void>(prev_logger).get(),
               static_cast<void *>(prev_queue))};
 
+        if (prev_queue) {
+          dprintf(STDERR_FILENO,
+                  "%s:%i:%s: prev_queue restored (plog=%p; pqueue=%p; usage "
+                  "count=%li)\n",
+                  basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                  prev_logger.get(), prev_queue, prev_logger.use_count());
+          fsync(STDERR_FILENO);
+        }
+
         Logger::async_output_queue_ = prev_queue;
 
         if (do_debug) {
@@ -562,10 +587,11 @@ auto static get() noexcept -> Logger & {
                   basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
                   static_pointer_cast<void>(prev_logger).get(),
                   static_cast<void *>(prev_queue));
+          fsync(STDERR_FILENO);
         }
 
         munmap(reinterpret_cast<void *>(mmapped_shm), kSzCombined);
-        return prev_logger;
+        return std::move(prev_logger);
       }
 
       if (const int shm_fd =
@@ -592,8 +618,12 @@ auto static get() noexcept -> Logger & {
                           basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
                           strerror(errno))};
 
-        *reinterpret_cast<std::shared_ptr<Logger> *>(
-            static_cast<char *>(mmapped_shm) + kOffLogger) = new_logger;
+        //*reinterpret_cast<std::shared_ptr<Logger> *>(
+        //    static_cast<char *>(mmapped_shm) + kOffLogger) = new_logger;
+
+        new (reinterpret_cast<std::shared_ptr<Logger> *>(
+            static_cast<char *>(mmapped_shm) + kOffLogger))
+            std::shared_ptr<Logger>{new_logger};
 
         *reinterpret_cast<decltype(Logger::async_output_queue_) *>(
             static_cast<char *>(mmapped_shm) + kOffQueue) = new_queue;
@@ -601,7 +631,11 @@ auto static get() noexcept -> Logger & {
         close(shm_fd);
         munmap(mmapped_shm, kSzCombined);
 
-        std::thread{[=]() {
+        std::latch sigwaiter_rdy{2};
+
+        std::thread{[=, &sigwaiter_rdy]() {
+          cpptrace::register_terminate_handler();
+
           if (!is_realtime) {
             const auto my_pthread = pthread_self();
 
@@ -619,7 +653,7 @@ auto static get() noexcept -> Logger & {
                 strerror(errno));
           }
 
-          if (do_debug)
+          if (do_debug) {
             dprintf(STDERR_FILENO,
                     "%s:%i:%s: spawned logger output async queue thread... "
                     "(q-size=%zu, "
@@ -627,75 +661,39 @@ auto static get() noexcept -> Logger & {
                     basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
                     sizeof(*Logger::async_output_queue_),
                     static_cast<int>(is_realtime));
+            fsync(STDERR_FILENO);
+          }
 
           if (Logger::async_output_queue_ == nullptr) {
-            if (do_debug)
+            if (do_debug) {
               dprintf(STDERR_FILENO,
                       "%s:%i:%s: awaiting asychronous IPC state...\n",
                       basename(__FILE__), __LINE__, __PRETTY_FUNCTION__);
-            while (!Logger::async_output_queue_);
+              fsync(STDERR_FILENO);
+            }
+
+            while (Logger::async_output_queue_ == nullptr) {
+              std::atomic_thread_fence(std::memory_order::seq_cst);
+            }
+
             if (do_debug)
-              dprintf(STDERR_FILENO, "%s:%i:%s: asychronous IPC state: set\n",
-                      basename(__FILE__), __LINE__, __PRETTY_FUNCTION__);
+              dprintf(STDERR_FILENO,
+                      "%s:%i:%s: asychronous IPC state: acquired (pq=%p)\n",
+                      basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                      Logger::async_output_queue_);
+            fsync(STDERR_FILENO);
           }
-
-          // setup abnormal termination intercept via signalfd
-          sigset_t mask;
-          sigemptyset(&mask);
-          sigaddset(&mask, SIGTERM);
-          sigaddset(&mask, SIGINT);
-          sigaddset(&mask, SIGQUIT);
-          sigaddset(&mask, SIGKILL);
-          sigaddset(&mask, SIGSEGV);
-          sigaddset(&mask, SIGABRT);
-          sigaddset(&mask, SIGBUS);
-          sigaddset(&mask, SIGFPE);
-          sigaddset(&mask, SIGILL);
-          sigaddset(&mask, SIGSYS);
-
-          if (sigprocmask(SIG_BLOCK, &mask, nullptr) == -1)
-            throw std::runtime_error{std::format(
-                "{}:{}:{}: sigprocmask failed: {}", basename(__FILE__),
-                __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
-
-          auto sigfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
 
           auto constexpr kInitBackoff = 1.0e3F;
           auto constexpr kBackoffGrowth = 1.1F;
           auto constexpr kBackoffIterLimit = 1e7F;
           constexpr auto kSleepDurationMillis = 100;
 
-          auto constexpr kCheckSig = [&](int sigfd) {
-            signalfd_siginfo snfo;
-            ssize_t nread = read(sigfd, &snfo, sizeof(snfo));
-            if (nread == -1) {
-              if (errno == EAGAIN) return;
-              throw std::runtime_error{
-                  std::format("{}:{}:{}: read failed: {}", basename(__FILE__),
-                              __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
-            }
-            if (nread != sizeof(snfo))
-              throw std::runtime_error{std::format(
-                  "{}:{}:{}: read failed: short read", basename(__FILE__),
-                  __LINE__, __PRETTY_FUNCTION__)};
-            if (snfo.ssi_signo == SIGQUIT) {
-              Logger::async_output_queue_->push(std::make_tuple(
-                  STDERR_FILENO, Logger::kWarnChalk,
-                  "received SIGQUIT, triggering graceful exit...\n"));
-              Logger::flush();
-              // exit(EXIT_SUCCESS);
-            } else {
-              Logger::async_output_queue_->push(std::make_tuple(
-                  STDERR_FILENO, compose(Logger::kErrorChalk, chalk::fmt::Bold),
-                  "received signal, triggering graceful exit...\n"));
-              Logger::flush();
-              // exit(EXIT_FAILURE);
-            }
-          };
+          sigwaiter_rdy.count_down();
 
           do {
-            kCheckSig(sigfd);
-            if (Logger::async_output_queue_->read_available()) {
+            if (Logger::async_output_queue_ &&
+                Logger::async_output_queue_->read_available()) {
               Logger::flush();
             } else {
               if (is_realtime) {
@@ -728,14 +726,85 @@ auto static get() noexcept -> Logger & {
           logger.~Logger();
         });
 
-        if (do_debug) {
-          dprintf(STDERR_FILENO, "%s:%i:%s: logger initialized (%p,%p)\n",
-                  basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
-                  new_logger.get(), new_queue);
-        }
+        // setup abnormal termination intercept via signalfd sigset_t mask;
+        sigset_t mask;
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGTERM);
+        sigaddset(&mask, SIGINT);
+        sigaddset(&mask, SIGQUIT);
+        sigaddset(&mask, SIGSEGV);
+        sigaddset(&mask, SIGABRT);
+        sigaddset(&mask, SIGBUS);
+        sigaddset(&mask, SIGFPE);
+        sigaddset(&mask, SIGILL);
+        sigaddset(&mask, SIGSYS);
+
+        if (sigprocmask(SIG_BLOCK, &mask, nullptr) == -1)
+          throw std::runtime_error{std::format(
+              "{}:{}:{}: sigprocmask failed: {}", basename(__FILE__), __LINE__,
+              __PRETTY_FUNCTION__, strerror(errno))};
+
+        std::thread{[mask, &sigwaiter_rdy] {
+          cpptrace::register_terminate_handler();
+
+          auto sigfd = signalfd(-1, &mask, /*SFD_NONBLOCK |  SFD_CLOEXEC*/
+                                0);
+
+          if (sigfd == -1)
+            throw std::runtime_error{
+                std::format("{}:{}:{}: signalfd failed: {}", basename(__FILE__),
+                            __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
+
+          dprintf(STDERR_FILENO, "%s:%i:%s: Sigcheck thread started\n",
+                  __FILE__, __LINE__, __PRETTY_FUNCTION__);
+          fsync(STDERR_FILENO);
+
+          sigwaiter_rdy.count_down();
+
+          while (true) {
+            static thread_local signalfd_siginfo snfo;
+            ssize_t nread = read(sigfd, &snfo, sizeof(snfo));
+            dprintf(STDERR_FILENO, "%s:%i:%s: read %zi bytes\n", __FILE__,
+                    __LINE__, __func__, nread);
+            fsync(STDERR_FILENO);
+            if (nread == -1) {
+              if (errno == EAGAIN) return;
+              throw std::runtime_error{
+                  std::format("{}:{}:{}: read failed: {}", basename(__FILE__),
+                              __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
+            }
+            if (nread != sizeof(snfo))
+              throw std::runtime_error{std::format(
+                  "{}:{}:{}: read failed: short read", basename(__FILE__),
+                  __LINE__, __PRETTY_FUNCTION__)};
+            if (snfo.ssi_signo == SIGQUIT) {
+              Logger::async_output_queue_->push(std::make_tuple(
+                  STDERR_FILENO, Logger::kWarnChalk,
+                  "received SIGQUIT, triggering graceful exit...\n"));
+              Logger::flush();
+              // exit(EXIT_SUCCESS);
+            } else {
+              Logger::async_output_queue_->push(std::make_tuple(
+                  STDERR_FILENO, compose(Logger::kErrorChalk, chalk::fmt::Bold),
+                  "received signal, triggering graceful exit...\n"));
+              Logger::flush();
+              // exit(EXIT_FAILURE);
+            }
+          }
+        }}.detach();
 
         Logger::async_output_queue_ = new_queue;
-        return new_logger;
+        sigwaiter_rdy.wait();
+
+        if (do_debug) {
+          dprintf(STDERR_FILENO,
+                  "%s:%i:%s: logger initialized (plog=%p,pcount=%li; pq=%p)\n",
+                  basename(__FILE__), __LINE__, __PRETTY_FUNCTION__,
+                  new_logger.get(), new_logger.use_count(), new_queue);
+          fsync(STDERR_FILENO);
+        }
+
+        return std::move(new_logger);
       }
 
       throw std::runtime_error{
