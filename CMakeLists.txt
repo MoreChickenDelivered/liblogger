@@ -32,6 +32,7 @@ endif()
 
 if(DEFINED ENV{VCPKG_ROOT})
 	execute_process(COMMAND "$ENV{VCPKG_ROOT}/vcpkg" install --recurse
+		range-v3
 		boost-iostreams boost-iostreams[lzma]
 		gtest boost-lockfree curl
 		liblzma bzip2 zstd cpptrace)
@@ -58,6 +59,8 @@ find_package(Boost REQUIRED COMPONENTS iostreams)
 
 find_package(cpptrace CONFIG REQUIRED)
 
+find_package(range-v3 CONFIG REQUIRED)
+
 target_link_libraries(liblogger INTERFACE
 	chalk::chalk date::date
 	Threads::Threads ${CURL_LIBRARIES}
@@ -67,6 +70,7 @@ target_link_libraries(liblogger INTERFACE
 	$<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>
 	ZLIB::ZLIB
 	cpptrace::cpptrace
+	range-v3::meta range-v3::concepts range-v3::range-v3
 	)
 target_include_directories(liblogger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}> $<INSTALL_INTERFACE:include/liblogger>)
 #target_compile_options(liblogger INTERFACE ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations)
