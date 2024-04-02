@@ -554,8 +554,9 @@ auto static get() noexcept -> Logger & {
 
         close(shm_fd);
 
-        auto prev_logger = *reinterpret_cast<std::shared_ptr<Logger> *>(
-            mmapped_shm + kOffLogger);
+        auto prev_logger = std::shared_ptr<Logger>(
+            *reinterpret_cast<std::shared_ptr<Logger> *>(mmapped_shm +
+                                                         kOffLogger));
 
         auto *prev_queue =
             *reinterpret_cast<decltype(Logger::async_output_queue_) *>(
