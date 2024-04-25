@@ -1,4 +1,5 @@
 # liblogger
+
 C++17 logging facility and slack messenger;
 Header-only library for logging.
 
@@ -10,13 +11,15 @@ Output lines are prefixed with ISO timestamps and suffixed `+<duration>`,[debug]
 ![Sample Session](sample-session.svg)
 
 ## API
-* `Logger(std::ostream &outStream, std::ostream &errStream)`: constructor outStream and errStream defaults to `stdin` and `stderr`
-* `Logger::Info`, `Logger::Warn`, `Logger:Error`, `Logger:Debug`, `Logger:Trace`: different output levels with indicative formatting
-* `setUnifiedOutput(bool)`: use one stream for all IO
-* `setVerbosity(level)`: with `level` being one of `Verbosity::{QUIET, ERR, WARN, INFO, DEBUG, TRACE}`
-* `static Logger::get()`: retrieve global default-constructred singleton
+
+- `Logger(std::ostream &outStream, std::ostream &errStream)`: constructor outStream and errStream defaults to `stdin` and `stderr`
+- `Logger::Info`, `Logger::Warn`, `Logger:Error`, `Logger:Debug`, `Logger:Trace`: different output levels with indicative formatting
+- `setUnifiedOutput(bool)`: use one stream for all IO
+- `setVerbosity(level)`: with `level` being one of `Verbosity::{QUIET, ERR, WARN, INFO, DEBUG, TRACE}`
+- `static Logger::get()`: retrieve global default-constructred singleton
 
 ## Sample usage
+
 ```c++
 #include <fstream>
 #include <chrono>
@@ -45,10 +48,10 @@ int main(int argc, char *argv[]) {
 	};
 
 	std::for_each(randInts(5), randInts(), [&](int i) { // by-ref capture for 'logger'
-			// raw lines, console.debug alike, does not support fmt::format syntax
+			// raw lines, console.debug alike, does not support std::format syntax
 			hd_logger.Trace("random integer:", i);
-			// using fmt::format
-			hd_logger.Trace(fmt::format("hig-res timestamp: {}ns", std::chrono::high_resolution_clock::now().time_since_epoch().count()));
+			// using std::format
+			hd_logger.Trace(std::format("hig-res timestamp: {}ns", std::chrono::high_resolution_clock::now().time_since_epoch().count()));
 
 		       	// managed logger, pretty prints
 			DEBUG("random int squared: {}", i*i);
