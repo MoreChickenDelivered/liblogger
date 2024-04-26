@@ -78,7 +78,7 @@ target_sources(liblogger INTERFACE
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/logutil/logutil.h>
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/inspector/inspector.hpp>
 	$<INSTALL_INTERFACE:>)
-set_target_properties(liblogger PROPERTIES PUBLIC_HEADER "logutil.h;slack.h;inspector.hpp")
+set_target_properties(liblogger PROPERTIES PUBLIC_HEADER "logutil/logutil.h;slack/slack.h;inspector/inspector.hpp")
 
 option(LIBLOGGER_COMPILE_EXAMPLE "Compile sample script" ON)
 
