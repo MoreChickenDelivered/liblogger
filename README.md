@@ -21,18 +21,18 @@ include dlopen'd .so libs) via mmapped POSIX shmem segment.
 
 ## API
 
-    - `Logger(outStream, errStream)`: constructor
+- `Logger(outStream, errStream)`: constructor
       outStream and errStream defaults to `stdin` and `stderr`
 
-    - `Logger::Info`, `Logger::Warn`, `Logger:Error`, `Logger:Debug`,
+- `Logger::Info`, `Logger::Warn`, `Logger:Error`, `Logger:Debug`,
       `Logger:Trace`: different output levels with indicative formatting
 
-    - `setUnifiedOutput(bool)`: use one stream for all IO
+- `setUnifiedOutput(bool)`: use one stream for all IO
 
-    - `setVerbosity(level)`: with `level` being one of
+- `setVerbosity(level)`: with `level` being one of
       `Verbosity::{QUIET, ERR, WARN, INFO, DEBUG, TRACE}`
 
-    - `static Logger::get()`: retrieve global default-constructred singleton
+- `static Logger::get()`: retrieve global default-constructred singleton
 
 ## Sample usage
 
@@ -47,6 +47,7 @@ include dlopen'd .so libs) via mmapped POSIX shmem segment.
 
 int main(int /*argc*/, char *argv[]) {
   auto &logger = Logger::get();  // default logger
+  ::srand(__rdtsc());
 
   auto hd_logger = [&] {
     auto hd_logfile_path = (std::filesystem::temp_directory_path() / argv[0])
@@ -63,7 +64,7 @@ int main(int /*argc*/, char *argv[]) {
   }();
 
   auto const my_fn = [&] {  // by-ref capture for 'logger'
-    const uint64_t i64 = ::rand();
+    const int64_t i64 = ::rand() % 1000;
 
     // global logger
     DEBUG("random int squared: {}", i64 * i64);
@@ -83,4 +84,6 @@ int main(int /*argc*/, char *argv[]) {
 }
 ```
 
-Output: ![Sample Output](./sample-output.png)
+Output:
+
+![Sample Output](./sample-output.png)
