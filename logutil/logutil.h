@@ -1,11 +1,4 @@
-//
-// (C) 2019,2023 Elias Benali, TT.io
-// Author: Elias Benali <ebenali@tradeterminal.io>
-// Created by deb on 11/23/19.
-//
-
-#ifndef TH2_LOGUTIL_H
-#define TH2_LOGUTIL_H
+#pragma once
 
 #include <bits/types/sigset_t.h>
 #include <chalk/chalk.h>
@@ -299,10 +292,7 @@ struct Logger {
   explicit Logger(int ost = STDOUT_FILENO, int est = STDERR_FILENO)
       : outStream_{ost}, errStream_{est} {}
 
-  ~Logger() {
-    dprintf(STDERR_FILENO, "Logger instance destroyed\n");
-    flush();
-  }
+  ~Logger() { flush(); }
 
   inline static void flush() {
     if (Logger::async_output_queue_) {
@@ -506,7 +496,9 @@ struct Logger {
 
 #if defined(NDEBUG) && !defined(OVERRIDE_NDEBUG)
 #define TRACE(...) \
-  { ; }
+  {                \
+    ;              \
+  }
 #else
 #define TRACE(_fmt, ...)                                                     \
   do {                                                                       \
@@ -745,7 +737,7 @@ auto static get() noexcept -> Logger & {
               "{}:{}:{}: sigprocmask failed: {}", basename(__FILE__), __LINE__,
               __PRETTY_FUNCTION__, strerror(errno))};
 
-        std::thread{[mask, &sigwaiter_rdy] {
+        std::thread{[mask, do_debug, &sigwaiter_rdy] {
           cpptrace::register_terminate_handler();
 
           auto sigfd = signalfd(-1, &mask, /*SFD_NONBLOCK |  SFD_CLOEXEC*/
@@ -756,9 +748,11 @@ auto static get() noexcept -> Logger & {
                 std::format("{}:{}:{}: signalfd failed: {}", basename(__FILE__),
                             __LINE__, __PRETTY_FUNCTION__, strerror(errno))};
 
-          dprintf(STDERR_FILENO, "%s:%i:%s: Sigcheck thread started\n",
-                  __FILE__, __LINE__, __PRETTY_FUNCTION__);
-          fsync(STDERR_FILENO);
+          if (do_debug) {
+            dprintf(STDERR_FILENO, "%s:%i:%s: Sigcheck thread started\n",
+                    __FILE__, __LINE__, __PRETTY_FUNCTION__);
+            fsync(STDERR_FILENO);
+          }
 
           sigwaiter_rdy.count_down();
 
@@ -823,5 +817,3 @@ auto static get() noexcept -> Logger & {
   }
 }
 }  // namespace logutil
-
-#endif  // TH2_LOGUTIL_H
