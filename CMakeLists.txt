@@ -55,7 +55,8 @@ find_package(zstd CONFIG REQUIRED)
 
 find_package(ZLIB REQUIRED)
 
-find_package(Boost REQUIRED COMPONENTS iostreams)
+find_package(boost_core CONFIG REQUIRED)
+find_package(boost_iostreams CONFIG REQUIRED)
 
 find_package(cpptrace CONFIG REQUIRED)
 
@@ -64,7 +65,7 @@ find_package(range-v3 CONFIG REQUIRED)
 target_link_libraries(liblogger INTERFACE
 	chalk::chalk date::date
 	Threads::Threads ${CURL_LIBRARIES}
-	Boost::boost Boost::iostreams
+	Boost::core Boost::iostreams
 	LibLZMA::LibLZMA
 	BZip2::BZip2
 	$<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>
